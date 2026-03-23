@@ -8,6 +8,8 @@
 // @homepage     https://github.com/roko-tech/fitgirl-steampeek
 // @supportURL   https://github.com/roko-tech/fitgirl-steampeek/issues
 // @icon         https://store.steampowered.com/favicon.ico
+// @updateURL    https://github.com/roko-tech/fitgirl-steampeek/raw/master/fitgirl-steampeek.user.js
+// @downloadURL  https://github.com/roko-tech/fitgirl-steampeek/raw/master/fitgirl-steampeek.user.js
 // @match        https://fitgirl-repacks.site/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_openInTab
