@@ -14,7 +14,9 @@ A userscript that adds a compact Steam info card to FitGirl Repacks pages, givin
 - **Most Helpful Reviews** — top 15 reviews with playtime, helpfulness score, and expand/collapse
 - **Smart Caching** — caches Steam data in localStorage (7-day expiry) with automatic quota management
 - **3-Tier URL Resolution** — finds the Steam page via RiotPixels, Steam Search API, or CS.RIN.RU
+- **Light & Dark Mode** — auto-detects the page theme and adapts colors
 - **Purge Cache** — menu command in Violentmonkey/Tampermonkey to clear all cached data
+- **Auto-Update** — automatically checks GitHub for new versions
 
 ## Installation
 
@@ -27,7 +29,17 @@ A userscript that adds a compact Steam info card to FitGirl Repacks pages, givin
 
 ## Screenshots
 
-*Coming soon*
+### Light Mode
+
+| Trailers | Screenshots | Reviews |
+|---|---|---|
+| ![Light Trailers](screenshots/light-trailers.png) | ![Light Screenshots](screenshots/light-screenshots.jpg) | ![Light Reviews](screenshots/light-reviews.png) |
+
+### Dark Mode
+
+| Trailers | Screenshots | Reviews |
+|---|---|---|
+| ![Dark Trailers](screenshots/dark-trailers.png) | ![Dark Screenshots](screenshots/dark-screenshots.jpg) | ![Dark Reviews](screenshots/dark-reviews.png) |
 
 ## How It Works
 
