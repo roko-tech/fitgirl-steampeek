@@ -45,13 +45,20 @@
         green: '#1a7f37', yellow: '#9a6700', red: '#cf222e', purple: '#8250df'
     };
     function detectTheme() {
-        const bg = getComputedStyle(document.body).backgroundColor;
-        if (bg) {
-            const match = bg.match(/\d+/g);
-            if (match) {
-                const brightness = (parseInt(match[0]) + parseInt(match[1]) + parseInt(match[2])) / 3;
-                return brightness > 127 ? 'light' : 'dark';
+        // Check the content area background, not body (FitGirl has dark body but light content)
+        const contentEl = document.querySelector('.entry-content, .post-content, article, .site-content, main, #content')
+                       || document.body;
+        let el = contentEl;
+        while (el) {
+            const bg = getComputedStyle(el).backgroundColor;
+            if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') {
+                const match = bg.match(/\d+/g);
+                if (match) {
+                    const brightness = (parseInt(match[0]) + parseInt(match[1]) + parseInt(match[2])) / 3;
+                    return brightness > 127 ? 'light' : 'dark';
+                }
             }
+            el = el.parentElement;
         }
         return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
     }
