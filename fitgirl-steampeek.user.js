@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FitGirl SteamPeek
 // @namespace    https://github.com/roko-tech/fitgirl-steampeek
-// @version      1.0
+// @version      1.1
 // @description  Peek at Steam ratings, trailers, screenshots, and reviews directly on FitGirl pages
 // @author       roko-tech
 // @license      MIT
@@ -21,7 +21,7 @@
 (function () {
     'use strict';
     const CONFIG = {
-        VERSION: '1.0',
+        VERSION: '1.1',
         CACHE_PREFIX: 'se8:',
         CACHE_EXPIRY_DAYS: 7,
         MAX_COMMENTS: 15,
@@ -30,13 +30,32 @@
         MAX_CACHE_ENTRIES: 50,
         OBSERVER_TIMEOUT: 15000
     };
-    const C = {
+    const DARK = {
         bg0: '#0d1117', bg1: '#161b22', bg2: '#21262d',
         txt: '#e6edf3', txt2: '#8b949e', txt3: '#6e7681',
         border: '#30363d',
         accent: '#66c0f4', accentDark: '#1b2838',
         green: '#3fb950', yellow: '#d29922', red: '#f85149', purple: '#bc8cff'
     };
+    const LIGHT = {
+        bg0: '#ffffff', bg1: '#f6f8fa', bg2: '#eaeef2',
+        txt: '#1f2328', txt2: '#656d76', txt3: '#8b949e',
+        border: '#d0d7de',
+        accent: '#0969da', accentDark: '#ddf4ff',
+        green: '#1a7f37', yellow: '#9a6700', red: '#cf222e', purple: '#8250df'
+    };
+    function detectTheme() {
+        const bg = getComputedStyle(document.body).backgroundColor;
+        if (bg) {
+            const match = bg.match(/\d+/g);
+            if (match) {
+                const brightness = (parseInt(match[0]) + parseInt(match[1]) + parseInt(match[2])) / 3;
+                return brightness > 127 ? 'light' : 'dark';
+            }
+        }
+        return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    }
+    const C = detectTheme() === 'light' ? LIGHT : DARK;
     // ==================== UTILS ====================
     const Utils = {
         cKey(k) { return CONFIG.CACHE_PREFIX + `v${CONFIG.VERSION}:` + k; },
@@ -553,11 +572,11 @@
                 <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
                     <a href="${Utils.escHtml(steamUrl)}" target="_blank" rel="noopener noreferrer"
                        style="display:inline-flex;align-items:center;gap:6px;padding:5px 14px;
-                              background:linear-gradient(135deg,${C.accentDark},#2a475e);
-                              color:white;text-decoration:none;border-radius:6px;
+                              background:linear-gradient(135deg,${C.accentDark},${C === LIGHT ? '#b6d4f0' : '#2a475e'});
+                              color:${C === LIGHT ? C.accent : 'white'};text-decoration:none;border-radius:6px;
                               font-weight:700;font-size:13px;border:1px solid ${C.accent};">
                         <svg width="13" height="13" viewBox="0 0 24 24">
-                            <path fill="white" d="M12,2C6.48,2,2,6.48,2,12s4.48,10,10,10s10-4.48,10-10S17.52,2,12,2z"/>
+                            <path fill="${C === LIGHT ? C.accent : 'white'}" d="M12,2C6.48,2,2,6.48,2,12s4.48,10,10,10s10-4.48,10-10S17.52,2,12,2z"/>
                         </svg>
                         Steam Store
                     </a>
