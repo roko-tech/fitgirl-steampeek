@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FitGirl SteamPeek
 // @namespace    https://github.com/roko-tech/fitgirl-steampeek
-// @version      1.1
+// @version      1.2
 // @description  Peek at Steam ratings, trailers, screenshots, and reviews directly on FitGirl pages
 // @author       roko-tech
 // @license      MIT
@@ -23,7 +23,7 @@
 (function () {
     'use strict';
     const CONFIG = {
-        VERSION: '1.1',
+        VERSION: '1.2',
         CACHE_PREFIX: 'se8:',
         CACHE_EXPIRY_DAYS: 7,
         MAX_COMMENTS: 15,
@@ -46,8 +46,11 @@
         accent: '#0969da', accentDark: '#ddf4ff',
         green: '#1a7f37', yellow: '#9a6700', red: '#cf222e', purple: '#8250df'
     };
+    // ==================== THEME ====================
+    const THEME_KEY = 'se-theme-pref';
+    function getThemePref() { return localStorage.getItem(THEME_KEY) || 'auto'; }
+    function setThemePref(v) { localStorage.setItem(THEME_KEY, v); }
     function detectTheme() {
-        // Check the content area background, not body (FitGirl has dark body but light content)
         const contentEl = document.querySelector('.entry-content, .post-content, article, .site-content, main, #content')
                        || document.body;
         let el = contentEl;
@@ -64,164 +67,20 @@
         }
         return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
     }
-    const C = detectTheme() === 'light' ? LIGHT : DARK;
-    // ==================== UTILS ====================
-    const Utils = {
-        cKey(k) { return CONFIG.CACHE_PREFIX + `v${CONFIG.VERSION}:` + k; },
-        getCache(key) {
-            try {
-                const d = JSON.parse(localStorage.getItem(this.cKey(key)));
-                if (!d) return null;
-                const exp = new Date(d.ts);
-                exp.setDate(exp.getDate() + CONFIG.CACHE_EXPIRY_DAYS);
-                if (new Date() > exp) { localStorage.removeItem(this.cKey(key)); return null; }
-                return d.data;
-            } catch { return null; }
-        },
-        setCache(key, data) {
-            const raw = JSON.stringify({ data, ts: new Date().toISOString() });
-            try {
-                localStorage.setItem(this.cKey(key), raw);
-            } catch (e) {
-                if (e.name === 'QuotaExceededError' || e.code === 22) {
-                    this._evictOldest();
-                    try { localStorage.setItem(this.cKey(key), raw); } catch {}
-                }
-            }
-            this._enforceMaxEntries();
-        },
-        clearCache(key) { localStorage.removeItem(this.cKey(key)); },
-        _evictOldest() {
-            const entries = [];
-            for (let i = 0; i < localStorage.length; i++) {
-                const k = localStorage.key(i);
-                if (!k.startsWith(CONFIG.CACHE_PREFIX)) continue;
-                try {
-                    const d = JSON.parse(localStorage.getItem(k));
-                    entries.push({ key: k, ts: d.ts || '' });
-                } catch { entries.push({ key: k, ts: '' }); }
-            }
-            entries.sort((a, b) => a.ts.localeCompare(b.ts));
-            const toRemove = Math.min(5, entries.length);
-            for (let i = 0; i < toRemove; i++) localStorage.removeItem(entries[i].key);
-        },
-        _enforceMaxEntries() {
-            const entries = [];
-            for (let i = 0; i < localStorage.length; i++) {
-                const k = localStorage.key(i);
-                if (k.startsWith(CONFIG.CACHE_PREFIX)) {
-                    try {
-                        const d = JSON.parse(localStorage.getItem(k));
-                        entries.push({ key: k, ts: d.ts || '' });
-                    } catch { entries.push({ key: k, ts: '' }); }
-                }
-            }
-            if (entries.length <= CONFIG.MAX_CACHE_ENTRIES) return;
-            entries.sort((a, b) => a.ts.localeCompare(b.ts));
-            const excess = entries.length - CONFIG.MAX_CACHE_ENTRIES;
-            for (let i = 0; i < excess; i++) localStorage.removeItem(entries[i].key);
-        },
-        forceHttps(url) {
-            return url ? url.replace(/^http:\/\//i, 'https://') : url;
-        },
-        escHtml(s) {
-            if (!s) return '';
-            const d = document.createElement('div');
-            d.textContent = s;
-            return d.innerHTML;
-        },
-        formatMins(m) {
-            if (m < 60) return `${m}m`;
-            const h = Math.floor(m / 60);
-            return h < 1000 ? `${h}h` : `${(h / 1000).toFixed(1)}k h`;
-        },
-        formatDate(ts) {
-            if (!ts) return 'Unknown';
-            const d = Math.floor((Date.now() - ts * 1000) / 86400000);
-            if (d <= 0) return 'Today';
-            if (d === 1) return '1d ago';
-            if (d < 7) return `${d}d ago`;
-            if (d < 30) return `${Math.floor(d / 7)}w ago`;
-            if (d < 365) return `${Math.floor(d / 30)}mo ago`;
-            return `${Math.floor(d / 365)}y ago`;
-        },
-        ratingStars(desc) {
-            const map = {
-                'Overwhelmingly Positive': '★★★★★',
-                'Very Positive':           '★★★★½',
-                'Positive':                '★★★★☆',
-                'Mostly Positive':         '★★★½☆',
-                'Mixed':                   '★★★☆☆',
-                'Mostly Negative':         '★★☆☆☆',
-                'Negative':                '★½☆☆☆',
-                'Very Negative':           '★☆☆☆☆',
-                'Overwhelmingly Negative': '☆☆☆☆☆'
-            };
-            for (const [k, v] of Object.entries(map)) if (desc?.includes(k)) return v;
-            return '☆☆☆☆☆';
-        },
-        ratingColor(desc) {
-            if (desc?.includes('Overwhelmingly Positive') || desc?.includes('Very Positive')) return C.green;
-            if (desc?.includes('Positive')) return '#7bc96f';
-            if (desc?.includes('Mixed')) return C.yellow;
-            return C.red;
-        },
-        metacriticColor(score) {
-            if (score >= 75) return C.green;
-            if (score >= 50) return C.yellow;
-            return C.red;
-        },
-        extractTitle() {
-            const h1 = document.querySelector('h1.entry-title, h1');
-            return (h1?.textContent || document.title || '')
-                .replace(/–\s*fitgirl\s*repacks?/i, '')
-                .replace(/\[.*?\]/g, '')
-                .replace(/\(.*?\)/g, '')
-                .replace(/v[\d.]+.*/i, '')
-                .replace(/\+\s*(all|[\d]+)\s*(dlcs?|updates?|extras?).*/i, '')
-                .replace(/repack\s*by.*/i, '')
-                .trim();
-        }
-    };
-    // ==================== API ====================
-    const API = {
-        req(cfg) {
-            return new Promise((res, rej) => GM_xmlhttpRequest({
-                ...cfg,
-                timeout: 15000,
-                onload:    r => (r.status >= 200 && r.status < 300) ? res(r) : rej(new Error(`HTTP ${r.status}`)),
-                onerror:   rej,
-                ontimeout: () => rej(new Error('Request timed out'))
-            }));
-        },
-        async csrin(url) {
-            return this.req({
-                method: 'GET', url, anonymous: false, cookies: true,
-                headers: { 'Referer': 'https://cs.rin.ru/', 'User-Agent': navigator.userAgent }
-            });
-        },
-        async riotpixels(url) {
-            return this.req({
-                method: 'GET', url,
-                headers: { 'Referer': 'https://fitgirl-repacks.site/' }
-            });
-        },
-        async appDetails(id) {
-            const r = await this.req({ method: 'GET', url: `https://store.steampowered.com/api/appdetails?appids=${id}&l=en` });
-            return JSON.parse(r.responseText);
-        },
-        async reviews(id, n = CONFIG.MAX_COMMENTS) {
-            const r = await this.req({ method: 'GET', url: `https://store.steampowered.com/appreviews/${id}?json=1&language=english&filter=helpful&purchase_type=all&num_per_page=${n}` });
-            return JSON.parse(r.responseText);
-        },
-        async steamSearch(title) {
-            const r = await this.req({ method: 'GET', url: `https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(title)}&l=en&cc=US` });
-            return JSON.parse(r.responseText);
-        }
-    };
-    // ==================== STYLES ====================
-    document.head.appendChild(Object.assign(document.createElement('style'), {
-        textContent: `
+    function resolveTheme() {
+        const pref = getThemePref();
+        return pref === 'auto' ? detectTheme() : pref;
+    }
+    let C = resolveTheme() === 'light' ? LIGHT : DARK;
+    // ==================== DYNAMIC STYLES ====================
+    let styleEl = null;
+    function injectStyles() {
+        if (styleEl) styleEl.remove();
+        styleEl = Object.assign(document.createElement('style'), { textContent: buildCSS() });
+        document.head.appendChild(styleEl);
+    }
+    function buildCSS() {
+        return `
             #se-card {
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
                 font-size: 13px;
@@ -281,9 +140,7 @@
                 animation: se-in .25s ease;
             }
             .se-review:hover { background: ${C.bg2}; }
-            .se-panel {
-                transition: opacity .2s ease;
-            }
+            .se-panel { transition: opacity .2s ease; }
             .se-genre-pill {
                 display: inline-block;
                 padding: 2px 8px;
@@ -295,76 +152,184 @@
                 border: 1px solid ${C.border};
             }
             .se-lightbox {
-                position: fixed;
-                inset: 0;
-                z-index: 99999;
+                position: fixed; inset: 0; z-index: 99999;
                 background: rgba(0,0,0,.92);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                animation: se-in .2s ease;
-                cursor: pointer;
+                display: flex; align-items: center; justify-content: center;
+                animation: se-in .2s ease; cursor: pointer;
             }
             .se-lightbox img {
-                max-width: 92vw;
-                max-height: 90vh;
-                object-fit: contain;
-                border-radius: 6px;
-                cursor: default;
-                animation: se-in .25s ease;
+                max-width: 92vw; max-height: 90vh; object-fit: contain;
+                border-radius: 6px; cursor: default; animation: se-in .25s ease;
             }
             .se-lb-btn {
-                position: absolute;
-                top: 50%;
-                transform: translateY(-50%);
-                background: rgba(22,27,34,.85);
-                color: ${C.txt};
-                border: 1px solid ${C.border};
-                border-radius: 50%;
-                width: 40px;
-                height: 40px;
-                font-size: 20px;
-                cursor: pointer;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                transition: .2s;
+                position: absolute; top: 50%; transform: translateY(-50%);
+                background: rgba(22,27,34,.85); color: ${C.txt};
+                border: 1px solid ${C.border}; border-radius: 50%;
+                width: 40px; height: 40px; font-size: 20px; cursor: pointer;
+                display: flex; align-items: center; justify-content: center; transition: .2s;
             }
             .se-lb-btn:hover { background: ${C.bg2}; border-color: ${C.accent}; color: ${C.accent}; }
             .se-lb-close {
-                position: absolute;
-                top: 16px;
-                right: 20px;
-                background: rgba(22,27,34,.85);
-                color: ${C.txt};
-                border: 1px solid ${C.border};
-                border-radius: 50%;
-                width: 36px;
-                height: 36px;
-                font-size: 18px;
-                cursor: pointer;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                transition: .2s;
+                position: absolute; top: 16px; right: 20px;
+                background: rgba(22,27,34,.85); color: ${C.txt};
+                border: 1px solid ${C.border}; border-radius: 50%;
+                width: 36px; height: 36px; font-size: 18px; cursor: pointer;
+                display: flex; align-items: center; justify-content: center; transition: .2s;
             }
             .se-lb-close:hover { background: ${C.bg2}; border-color: ${C.red}; color: ${C.red}; }
             .se-lb-counter {
-                position: absolute;
-                bottom: 20px;
-                left: 50%;
-                transform: translateX(-50%);
-                font-size: 13px;
-                color: ${C.txt2};
-                background: rgba(22,27,34,.85);
-                padding: 4px 14px;
-                border-radius: 20px;
-                border: 1px solid ${C.border};
+                position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+                font-size: 13px; color: ${C.txt2};
+                background: rgba(22,27,34,.85); padding: 4px 14px;
+                border-radius: 20px; border: 1px solid ${C.border};
             }
+            .se-theme-btn {
+                background: none; border: none; color: ${C.txt2};
+                cursor: pointer; font-size: 14px; padding: 2px 7px;
+                border-radius: 4px; line-height: 1; transition: .2s;
+            }
+            .se-theme-btn:hover { color: ${C.accent}; }
             #se-card::-webkit-scrollbar       { width: 4px; }
             #se-card::-webkit-scrollbar-thumb { background: ${C.accent}; border-radius: 2px; }
-        `
-    }));
+        `;
+    }
+    injectStyles();
+    // ==================== UTILS ====================
+    const Utils = {
+        cKey(k) { return CONFIG.CACHE_PREFIX + `v${CONFIG.VERSION}:` + k; },
+        getCache(key) {
+            try {
+                const d = JSON.parse(localStorage.getItem(this.cKey(key)));
+                if (!d) return null;
+                const exp = new Date(d.ts);
+                exp.setDate(exp.getDate() + CONFIG.CACHE_EXPIRY_DAYS);
+                if (new Date() > exp) { localStorage.removeItem(this.cKey(key)); return null; }
+                return d.data;
+            } catch { return null; }
+        },
+        setCache(key, data) {
+            try {
+                localStorage.setItem(this.cKey(key), JSON.stringify({ data, ts: new Date().toISOString() }));
+            } catch {
+                this._evictOldest();
+                try {
+                    localStorage.setItem(this.cKey(key), JSON.stringify({ data, ts: new Date().toISOString() }));
+                } catch {}
+            }
+        },
+        clearCache(key) { localStorage.removeItem(this.cKey(key)); },
+        _evictOldest() {
+            const entries = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (k.startsWith(CONFIG.CACHE_PREFIX)) {
+                    try {
+                        const d = JSON.parse(localStorage.getItem(k));
+                        entries.push({ key: k, ts: d.ts || '' });
+                    } catch { entries.push({ key: k, ts: '' }); }
+                }
+            }
+            entries.sort((a, b) => a.ts.localeCompare(b.ts));
+            const toRemove = Math.max(1, entries.length - CONFIG.MAX_CACHE_ENTRIES);
+            for (let i = 0; i < toRemove; i++) localStorage.removeItem(entries[i].key);
+        },
+        escHtml(s) {
+            if (!s) return '';
+            const div = document.createElement('div');
+            div.textContent = s;
+            return div.innerHTML;
+        },
+        forceHttps(url) {
+            return url ? url.replace(/^http:\/\//i, 'https://') : '';
+        },
+        formatMins(m) {
+            if (m < 60) return `${m}m`;
+            const h = Math.floor(m / 60);
+            return h < 1000 ? `${h}h` : `${(h / 1000).toFixed(1)}k h`;
+        },
+        formatDate(ts) {
+            const d = Math.floor((Date.now() - ts * 1000) / 86400000);
+            if (d <= 0) return 'Today';
+            if (d === 1) return '1d ago';
+            if (d < 7) return `${d}d ago`;
+            if (d < 30) return `${Math.floor(d / 7)}w ago`;
+            if (d < 365) return `${Math.floor(d / 30)}mo ago`;
+            return `${Math.floor(d / 365)}y ago`;
+        },
+        ratingStars(desc) {
+            const map = {
+                'Overwhelmingly Positive': '★★★★★',
+                'Very Positive':           '★★★★½',
+                'Positive':                '★★★★☆',
+                'Mostly Positive':         '★★★½☆',
+                'Mixed':                   '★★★☆☆',
+                'Mostly Negative':         '★★☆☆☆',
+                'Negative':                '★½☆☆☆',
+                'Very Negative':           '★☆☆☆☆',
+                'Overwhelmingly Negative': '☆☆☆☆☆'
+            };
+            for (const [k, v] of Object.entries(map)) if (desc?.includes(k)) return v;
+            return '☆☆☆☆☆';
+        },
+        ratingColor(desc) {
+            if (desc?.includes('Overwhelmingly Positive') || desc?.includes('Very Positive')) return C.green;
+            if (desc?.includes('Positive')) return '#7bc96f';
+            if (desc?.includes('Mixed')) return C.yellow;
+            return C.red;
+        },
+        metacriticColor(score) {
+            if (score >= 75) return '#6c3';
+            if (score >= 50) return '#fc3';
+            return '#f33';
+        },
+        extractTitle() {
+            const h1 = document.querySelector('h1.entry-title, h1');
+            return (h1?.textContent || document.title || '')
+                .replace(/–\s*fitgirl\s*repacks?/i, '')
+                .replace(/\[.*?\]/g, '')
+                .replace(/\(.*?\)/g, '')
+                .replace(/v[\d.]+.*/i, '')
+                .replace(/\+\s*(all|[\d]+)\s*(dlcs?|updates?|extras?).*/i, '')
+                .replace(/repack\s*by.*/i, '')
+                .trim();
+        }
+    };
+    // ==================== API ====================
+    const API = {
+        req(cfg) {
+            return new Promise((res, rej) => GM_xmlhttpRequest({
+                ...cfg,
+                timeout: 15000,
+                onload:    r => (r.status >= 200 && r.status < 300) ? res(r) : rej(new Error(`HTTP ${r.status}`)),
+                onerror:   rej,
+                ontimeout: () => rej(new Error('Request timed out'))
+            }));
+        },
+        async csrin(url) {
+            return this.req({
+                method: 'GET', url, anonymous: false, cookies: true,
+                headers: { 'Referer': 'https://cs.rin.ru/', 'User-Agent': navigator.userAgent }
+            });
+        },
+        async riotpixels(url) {
+            return this.req({
+                method: 'GET', url,
+                headers: { 'Referer': 'https://fitgirl-repacks.site/' }
+            });
+        },
+        async appDetails(id) {
+            const r = await this.req({ method: 'GET', url: `https://store.steampowered.com/api/appdetails?appids=${id}&l=en` });
+            return JSON.parse(r.responseText);
+        },
+        async reviews(id, n = CONFIG.MAX_COMMENTS) {
+            const r = await this.req({ method: 'GET', url: `https://store.steampowered.com/appreviews/${id}?json=1&language=english&filter=helpful&purchase_type=all&num_per_page=${n}` });
+            return JSON.parse(r.responseText);
+        },
+        async steamSearch(title) {
+            const r = await this.req({ method: 'GET', url: `https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(title)}&l=en&cc=US` });
+            return JSON.parse(r.responseText);
+        }
+    };
     // ==================== MAIN CLASS ====================
     class SteamCard {
         constructor() {
@@ -422,6 +387,9 @@
             card.insertAdjacentHTML('afterbegin',
                 `<div style="height:2px;background:linear-gradient(90deg,${C.accent},${C.purple},${C.accent});"></div>`
             );
+            const pref = getThemePref();
+            const themeIcon = pref === 'auto' ? '◐' : pref === 'light' ? '☀' : '🌙';
+            const themeTitle = pref === 'auto' ? 'Theme: Auto' : pref === 'light' ? 'Theme: Light' : 'Theme: Dark';
             const hdr = document.createElement('div');
             hdr.style.cssText = `
                 display: flex;
@@ -440,6 +408,8 @@
                     <span id="se-badge" style="font-size:10px;padding:1px 6px;border-radius:4px;font-weight:600;"></span>
                 </span>
                 <div style="display:flex;gap:4px;">
+                    <button id="se-theme"  title="${themeTitle}"
+                        class="se-theme-btn">${themeIcon}</button>
                     <button id="se-toggle"  title="Collapse"
                         style="background:none;border:none;color:${C.txt2};cursor:pointer;font-size:15px;padding:2px 7px;border-radius:4px;line-height:1;">▾</button>
                     <button id="se-refresh" title="Refresh"
@@ -457,6 +427,7 @@
                 hdr.querySelector('#se-toggle').textContent = this._collapsed ? '▸' : '▾';
             };
             hdr.querySelector('#se-refresh').onclick = () => this._refresh();
+            hdr.querySelector('#se-theme').onclick = () => this._cycleTheme();
             this.card = card;
             this.body = body;
             this.link.parentNode.insertBefore(card, this.link.nextSibling);
@@ -475,26 +446,32 @@
                 vertical-align: middle; margin-left: 6px;
             `;
         }
-        // ── Loading skeleton ────────────────────────────────────────────────
-        _skeleton() {
-            return `
-                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;">
-                    <div class="se-skeleton" style="width:120px;height:32px;"></div>
-                    <div class="se-skeleton" style="width:240px;height:16px;"></div>
-                </div>
-                <div class="se-skeleton" style="height:4px;margin-bottom:12px;"></div>
-                <div class="se-skeleton" style="height:36px;margin-bottom:12px;border-radius:8px;"></div>
-                <div style="display:flex;gap:6px;margin-bottom:10px;">
-                    <div class="se-skeleton" style="width:100px;height:28px;"></div>
-                    <div class="se-skeleton" style="width:110px;height:28px;"></div>
-                    <div class="se-skeleton" style="width:120px;height:28px;"></div>
-                </div>
-                <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:8px;">
-                    <div class="se-skeleton" style="height:105px;"></div>
-                    <div class="se-skeleton" style="height:105px;"></div>
-                    <div class="se-skeleton" style="height:105px;"></div>
-                </div>
-            `;
+        // ── Theme toggle ─────────────────────────────────────────────────────
+        _cycleTheme() {
+            const order = ['auto', 'light', 'dark'];
+            const cur = getThemePref();
+            const next = order[(order.indexOf(cur) + 1) % order.length];
+            setThemePref(next);
+            // Swap palette
+            C = (next === 'auto' ? detectTheme() : next) === 'light' ? LIGHT : DARK;
+            // Re-inject styles with new colors
+            injectStyles();
+            // Rebuild card in place
+            const parent = this.card.parentNode;
+            const sibling = this.card.nextSibling;
+            this.card.remove();
+            this._build();
+            if (sibling) {
+                parent.insertBefore(this.card, sibling);
+            } else {
+                parent.appendChild(this.card);
+            }
+            // Reload content
+            this._reviews = null;
+            this._cachedRating = null;
+            this._cachedReviews = null;
+            this._screenshotUrls = [];
+            this._load();
         }
         // ── Load orchestrator ───────────────────────────────────────────────
         async _load() {
@@ -577,15 +554,16 @@
             const idMatch = steamUrl.match(/app\/(\d+)/);
             if (!idMatch) return;
             this.appId = idMatch[1];
+            const isLight = C === LIGHT;
             this._setBody(`
                 <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
                     <a href="${Utils.escHtml(steamUrl)}" target="_blank" rel="noopener noreferrer"
                        style="display:inline-flex;align-items:center;gap:6px;padding:5px 14px;
-                              background:linear-gradient(135deg,${C.accentDark},${C === LIGHT ? '#b6d4f0' : '#2a475e'});
-                              color:${C === LIGHT ? C.accent : 'white'};text-decoration:none;border-radius:6px;
+                              background:linear-gradient(135deg,${C.accentDark},${isLight ? '#b6d4f0' : '#2a475e'});
+                              color:${isLight ? C.accent : 'white'};text-decoration:none;border-radius:6px;
                               font-weight:700;font-size:13px;border:1px solid ${C.accent};">
                         <svg width="13" height="13" viewBox="0 0 24 24">
-                            <path fill="${C === LIGHT ? C.accent : 'white'}" d="M12,2C6.48,2,2,6.48,2,12s4.48,10,10,10s10-4.48,10-10S17.52,2,12,2z"/>
+                            <path fill="${isLight ? C.accent : 'white'}" d="M12,2C6.48,2,2,6.48,2,12s4.48,10,10,10s10-4.48,10-10S17.52,2,12,2z"/>
                         </svg>
                         Steam Store
                     </a>
@@ -727,7 +705,6 @@
                 const d    = det[id]?.data;
                 const wrap = this.body.querySelector('#se-media-wrap');
                 if (!d || !wrap) return;
-                // Render info bar and Metacritic from appDetails
                 this._renderInfoBar(d);
                 this._renderMetacritic(d.metacritic);
                 const movies = d.movies || [];
@@ -745,7 +722,6 @@
                     return;
                 }
                 wrap.innerHTML = '';
-                // Tab bar
                 const tabBar = document.createElement('div');
                 tabBar.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;';
                 let activePanel = null;
@@ -756,8 +732,6 @@
                     btn.onclick = () => {
                         tabBar.querySelectorAll('.se-tab').forEach(b => b.classList.remove('active'));
                         btn.classList.add('active');
-                        // Smooth transition: fade out current, fade in new
-                        const panels = wrap.querySelectorAll('.se-panel');
                         const target = wrap.querySelector('#' + t.id);
                         if (activePanel && activePanel !== target) {
                             activePanel.style.opacity = '0';
@@ -765,12 +739,10 @@
                             setTimeout(() => {
                                 prev.style.display = 'none';
                                 target.style.display = 'block';
-                                requestAnimationFrame(() => {
-                                    target.style.opacity = '1';
-                                });
+                                requestAnimationFrame(() => { target.style.opacity = '1'; });
                             }, 200);
                         } else {
-                            panels.forEach(p => { p.style.display = 'none'; p.style.opacity = '0'; });
+                            wrap.querySelectorAll('.se-panel').forEach(p => { p.style.display = 'none'; p.style.opacity = '0'; });
                             target.style.display = 'block';
                             requestAnimationFrame(() => { target.style.opacity = '1'; });
                         }
@@ -781,7 +753,6 @@
                 wrap.appendChild(tabBar);
                 // ── Trailers ──
                 if (movies.length) {
-                    // Build trailer list for lightbox navigation
                     this._trailers = movies.map((m, i) => ({
                         url: Utils.forceHttps(m.hls_h264 || m.dash_h264 || m.webm?.max || m.mp4?.max || m.webm?.['480'] || m.mp4?.['480'] || ''),
                         name: m.name || `Trailer ${i + 1}`
@@ -819,7 +790,6 @@
                             e.preventDefault();
                             e.stopPropagation();
                             if (!videoUrl) return;
-                            // Find this trailer's index in the filtered list
                             const idx = this._trailers.findIndex(t => t.name === (m.name || `Trailer ${i + 1}`));
                             this._showVideoLightbox(idx >= 0 ? idx : 0);
                         });
@@ -964,9 +934,7 @@
                 white-space:nowrap;max-width:80vw;overflow:hidden;text-overflow:ellipsis;`;
             const counter = document.createElement('div');
             counter.className = 'se-lb-counter';
-            // Load a trailer by index
             const loadTrailer = (idx) => {
-                // Cleanup previous
                 if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
                 video.pause();
                 video.removeAttribute('src');
@@ -1016,7 +984,6 @@
                 video.style.display = 'none';
                 errMsg.style.display = 'flex';
             });
-            // Close
             const closeBtn = document.createElement('button');
             closeBtn.className = 'se-lb-close';
             closeBtn.textContent = '✕';
@@ -1030,7 +997,6 @@
             };
             closeBtn.onclick = (e) => { e.stopPropagation(); cleanup(); };
             overlay.onclick = cleanup;
-            // Arrow buttons (only if multiple trailers)
             if (trailers.length > 1) {
                 const prevBtn = document.createElement('button');
                 prevBtn.className = 'se-lb-btn';
@@ -1057,7 +1023,6 @@
             overlay.appendChild(closeBtn);
             overlay.appendChild(counter);
             document.body.appendChild(overlay);
-            // Load the initial trailer
             loadTrailer(current);
         }
         // ── Screenshot lightbox ─────────────────────────────────────────────
@@ -1066,11 +1031,9 @@
             if (!urls.length) return;
             let current = index;
             let navigating = false;
-            // Remove existing lightbox
             document.querySelector('.se-lightbox')?.remove();
             const overlay = document.createElement('div');
             overlay.className = 'se-lightbox';
-            // Spinner shown while image loads
             const spinner = document.createElement('div');
             spinner.className = 'se-spinner';
             spinner.style.cssText = 'width:28px;height:28px;position:absolute;';
@@ -1078,7 +1041,6 @@
             img.style.transition = 'opacity .15s ease';
             img.style.opacity = '0';
             img.alt = `Screenshot ${current + 1}`;
-            // Show image only after it loads
             const loadImage = (url) => {
                 img.style.opacity = '0';
                 spinner.style.display = 'inline-block';
@@ -1107,12 +1069,10 @@
                 loadImage(urls[current]);
                 updateCounter();
             };
-            // Close button
             const closeBtn = document.createElement('button');
             closeBtn.className = 'se-lb-close';
             closeBtn.textContent = '✕';
             closeBtn.onclick = (e) => { e.stopPropagation(); overlay.remove(); };
-            // Arrow buttons
             if (urls.length > 1) {
                 const prevBtn = document.createElement('button');
                 prevBtn.className = 'se-lb-btn';
@@ -1134,14 +1094,12 @@
             overlay.appendChild(closeBtn);
             overlay.appendChild(counter);
             document.body.appendChild(overlay);
-            // Keyboard navigation
             const onKey = (e) => {
                 if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', onKey); }
                 if (e.key === 'ArrowLeft')  navigate(-1);
                 if (e.key === 'ArrowRight') navigate(1);
             };
             document.addEventListener('keydown', onKey);
-            // Cleanup listener when overlay is removed
             const obs = new MutationObserver(() => {
                 if (!document.body.contains(overlay)) {
                     document.removeEventListener('keydown', onKey);
@@ -1214,7 +1172,6 @@
         }
     });
     // ==================== BOOT ====================
-    // Only run on single post pages, not listing/archive/home pages
     if (document.body.classList.contains('single') ||
         document.querySelector('article.post') && document.querySelectorAll('article.post').length === 1) {
         new SteamCard().init();
