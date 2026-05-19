@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FitGirl SteamPeek
 // @namespace    https://github.com/roko-tech/fitgirl-steampeek
-// @version      1.2
+// @version      1.3
 // @description  Peek at Steam ratings, trailers, screenshots, and reviews directly on FitGirl pages
 // @author       roko-tech
 // @license      MIT
@@ -14,7 +14,7 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM_openInTab
 // @grant        GM_registerMenuCommand
-// @connect      ru.riotpixels.com
+// @connect      riotpixels.com
 // @connect      store.steampowered.com
 // @connect      cs.rin.ru
 // @require      https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js
