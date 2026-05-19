@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FitGirl SteamPeek
 // @namespace    https://github.com/roko-tech/fitgirl-steampeek
-// @version      1.3
+// @version      1.4
 // @description  Peek at Steam ratings, trailers, screenshots, and reviews directly on FitGirl pages
 // @author       roko-tech
 // @license      MIT
@@ -313,7 +313,7 @@
         },
         async riotpixels(url) {
             return this.req({
-                method: 'GET', url,
+                method: 'GET', url, anonymous: false, cookies: true,
                 headers: { 'Referer': 'https://fitgirl-repacks.site/' }
             });
         },
@@ -488,6 +488,7 @@
                 if (!url) return;
                 Utils.setCache(this.path, { steamUrl: url });
                 const badgeMap = {
+                    page:       [C.green,  'page'],
                     riotpixels: [C.green,  'riotpixels'],
                     steam:      [C.accent, 'search'],
                     csrin:      [C.yellow, 'cs.rin']
@@ -508,8 +509,10 @@
                 this.body.querySelector('#se-retry')?.addEventListener('click', () => this._refresh());
             }
         }
-        // ── 3-Tier URL resolution ────────────────────────────────────────────
+        // ── 4-Tier URL resolution ────────────────────────────────────────────
         async _fetchUrl() {
+            const domUrl = this._fromPageDom();
+            if (domUrl) return { url: domUrl, tier: 'page' };
             if (this.riotLink?.href) {
                 try {
                     const url = await this._fromRiotPixels(this.riotLink.href);
@@ -532,6 +535,10 @@
             const m = r.responseText.match(/https?:\/\/store\.steampowered\.com\/app\/\d+[^\s"']*/i);
             if (!m) throw new Error('Steam URL not found on CS.RIN.RU');
             return { url: m[0], tier: 'csrin' };
+        }
+        _fromPageDom() {
+            const m = document.body.innerHTML.match(/store_trailers\/(\d+)\//i);
+            return m ? `https://store.steampowered.com/app/${m[1]}/` : null;
         }
         async _fromRiotPixels(riotUrl) {
             const r = await API.riotpixels(riotUrl);
