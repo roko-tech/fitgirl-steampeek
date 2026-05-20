@@ -13,8 +13,8 @@ A userscript that adds a compact Steam info card to FitGirl Repacks pages, givin
 - **Screenshots** — browse screenshots in a lightbox overlay with keyboard navigation
 - **Most Helpful Reviews** — top 15 reviews with playtime, helpfulness score, and expand/collapse
 - **Smart Caching** — caches Steam data in localStorage (7-day expiry) with automatic quota management
-- **3-Tier URL Resolution** — finds the Steam page via RiotPixels, Steam Search API, or CS.RIN.RU
-- **Light & Dark Mode** — auto-detects the page theme and adapts colors
+- **3-Tier URL Resolution** — finds the Steam page via the embedded trailer/asset URL on the FitGirl page, then the Steam Search API by URL slug, then CS.RIN.RU as a last resort
+- **Light & Dark Mode** — auto-detects the page theme (and re-detects when the page toggles theme) and adapts colors
 - **Purge Cache** — menu command in Violentmonkey/Tampermonkey to clear all cached data
 - **Auto-Update** — automatically checks GitHub for new versions
 
@@ -45,8 +45,11 @@ A userscript that adds a compact Steam info card to FitGirl Repacks pages, givin
 
 When you open a game page on FitGirl Repacks, the script:
 
-1. Finds the CS.RIN.RU and RiotPixels links on the page
-2. Resolves the Steam Store URL through a 3-tier system (RiotPixels → Steam Search → CS.RIN.RU)
+1. Locates an anchor inside the post (the CS.RIN.RU discussion link, falling back to the post body)
+2. Resolves the Steam Store URL through a 3-tier chain:
+   1. **Page DOM** — extracts the Steam app ID directly from the embedded Steam trailer or screenshot URL that FitGirl hot-links from Steam's CDN (zero network calls)
+   2. **Steam Search** — falls back to the Steam store-search API, using the URL slug as the query and progressively shortening it until the API returns results
+   3. **CS.RIN.RU** — last resort, scrapes the linked discussion thread (requires you to be logged in)
 3. Fetches game details and reviews from the Steam API
 4. Renders a compact card with ratings, game info, and tabbed media panels
 
@@ -55,7 +58,6 @@ When you open a game page on FitGirl Repacks, the script:
 | Permission | Reason |
 |---|---|
 | `store.steampowered.com` | Fetch game details, reviews, and search |
-| `ru.riotpixels.com` | Extract Steam URL from RiotPixels page |
 | `cs.rin.ru` | Fallback Steam URL extraction (requires login) |
 | `cdn.jsdelivr.net` | Load hls.js for trailer streaming |
 

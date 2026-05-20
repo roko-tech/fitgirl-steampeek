@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FitGirl SteamPeek
 // @namespace    https://github.com/roko-tech/fitgirl-steampeek
-// @version      1.8
+// @version      1.9
 // @description  Peek at Steam ratings, trailers, screenshots, and reviews directly on FitGirl pages
 // @author       roko-tech
 // @license      MIT
@@ -14,7 +14,6 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM_openInTab
 // @grant        GM_registerMenuCommand
-// @connect      riotpixels.com
 // @connect      store.steampowered.com
 // @connect      cs.rin.ru
 // @require      https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js
@@ -23,7 +22,7 @@
 (function () {
     'use strict';
     const CONFIG = {
-        VERSION: '1.2',
+        VERSION: '1.9',
         CACHE_PREFIX: 'se8:',
         CACHE_EXPIRY_DAYS: 7,
         MAX_COMMENTS: 15,
@@ -303,12 +302,6 @@
                 headers: { 'Referer': 'https://cs.rin.ru/', 'User-Agent': navigator.userAgent }
             });
         },
-        async riotpixels(url) {
-            return this.req({
-                method: 'GET', url, anonymous: false, cookies: true,
-                headers: { 'Referer': 'https://fitgirl-repacks.site/' }
-            });
-        },
         async appDetails(id) {
             const r = await this.req({ method: 'GET', url: `https://store.steampowered.com/api/appdetails?appids=${id}&l=en` });
             return JSON.parse(r.responseText);
@@ -327,35 +320,41 @@
         constructor() {
             this.path       = location.pathname;
             this.link       = null;
-            this.riotLink   = null;
+            this.anchor     = null;
             this.appId      = null;
             this._reviews   = null;
             this._collapsed = false;
             this._reviewsReady = null;
             this._reviewsResolve = null;
             this._screenshotUrls = [];
+            this._cachedRating  = null;
+            this._cachedReviews = null;
+            this._ratingForCache  = null;
+            this._reviewsForCache = null;
         }
         init() {
-            this._waitForLinks(({ csrin, riotpixels }) => {
-                this.link     = csrin;
-                this.riotLink = riotpixels || null;
+            this._findAnchor(({ csrin, anchor }) => {
+                this.link   = csrin || null;
+                this.anchor = anchor;
                 this._build();
                 this._load();
             });
         }
         // ── DOM watcher ─────────────────────────────────────────────────────
-        _waitForLinks(cb) {
+        _findAnchor(cb) {
             const find = () => {
                 const csrin = [...document.querySelectorAll('a[href*="cs.rin.ru"]')]
                     .find(a => /discussion|cs\.rin\.ru/i.test(a.textContent));
-                const riotpixels = document.querySelector('a[href*="riotpixels.com"]');
-                return csrin ? { csrin, riotpixels } : null;
+                const anchor = csrin
+                    || document.querySelector('.entry-content')
+                    || document.querySelector('article.post');
+                return anchor ? { csrin: csrin || null, anchor } : null;
             };
             const result = find();
             if (result) { cb(result); return; }
             const tid = setTimeout(() => {
                 obs.disconnect();
-                console.warn('[SE] Timed out waiting for CS.RIN.RU link');
+                console.warn('[SE] Timed out finding a card anchor');
             }, CONFIG.OBSERVER_TIMEOUT);
             const obs = new MutationObserver(() => {
                 const r = find();
@@ -422,55 +421,58 @@
             hdr.querySelector('#se-theme').onclick = () => this._cycleTheme();
             this.card = card;
             this.body = body;
-            this.link.parentNode.insertBefore(card, this.link.nextSibling);
+            if (this.link) {
+                this.link.parentNode.insertBefore(card, this.link.nextSibling);
+            } else {
+                this.anchor.insertBefore(card, this.anchor.firstChild);
+            }
             this._setBody(`<span class="se-spinner"></span> Loading Steam data…`);
         }
         _setBody(html) { this.body.innerHTML = html; }
-        _setBadge(label, color) {
+        _setBadge(label, color, tooltip) {
             const b = this.card?.querySelector('#se-badge');
-            if (!b || !label) { if (b) b.textContent = ''; return; }
+            if (!b || !label) { if (b) { b.textContent = ''; b.title = ''; } return; }
             b.textContent = label;
+            b.title = tooltip || '';
             b.style.cssText = `
                 background: ${color}22; color: ${color};
                 border: 1px solid ${color}55;
                 font-size: 10px; padding: 1px 6px;
                 border-radius: 4px; font-weight: 600;
                 vertical-align: middle; margin-left: 6px;
+                cursor: ${tooltip ? 'help' : 'default'};
             `;
         }
         // ── Theme toggle ─────────────────────────────────────────────────────
-        _cycleTheme() {
-            const order = ['auto', 'light', 'dark'];
-            const cur = getThemePref();
-            const next = order[(order.indexOf(cur) + 1) % order.length];
-            setThemePref(next);
-            // Swap palette
-            C = (next === 'auto' ? detectTheme() : next) === 'light' ? LIGHT : DARK;
-            // Re-inject styles with new colors
+        _applyTheme() {
+            C = resolveTheme() === 'light' ? LIGHT : DARK;
             injectStyles();
-            // Rebuild card in place
-            const parent = this.card.parentNode;
+            const parent  = this.card.parentNode;
             const sibling = this.card.nextSibling;
             this.card.remove();
             this._build();
-            if (sibling) {
-                parent.insertBefore(this.card, sibling);
-            } else {
-                parent.appendChild(this.card);
-            }
-            // Reload content
+            if (sibling) parent.insertBefore(this.card, sibling);
+            else         parent.appendChild(this.card);
             this._reviews = null;
-            this._cachedRating = null;
+            this._cachedRating  = null;
             this._cachedReviews = null;
             this._screenshotUrls = [];
             this._load();
         }
+        _cycleTheme() {
+            const order = ['auto', 'light', 'dark'];
+            const cur = getThemePref();
+            setThemePref(order[(order.indexOf(cur) + 1) % order.length]);
+            this._applyTheme();
+        }
         // ── Load orchestrator ───────────────────────────────────────────────
         async _load() {
+            this._ratingForCache  = null;
+            this._reviewsForCache = null;
             try {
                 const cached = Utils.getCache(this.path);
                 if (cached?.steamUrl) {
-                    this._setBadge('cached', C.txt3);
+                    this._setBadge('cached', C.txt3, 'Loaded from local cache (7-day TTL)');
                     if (cached.ratingData) this._cachedRating = cached.ratingData;
                     if (cached.reviewsData) this._cachedReviews = cached.reviewsData;
                     await this._display(cached.steamUrl);
@@ -478,16 +480,20 @@
                 }
                 const { url, tier } = await this._fetchUrl();
                 if (!url) return;
-                Utils.setCache(this.path, { steamUrl: url });
                 const badgeMap = {
-                    page:       [C.green,  'page'],
-                    riotpixels: [C.green,  'riotpixels'],
-                    steam:      [C.accent, 'search'],
-                    csrin:      [C.yellow, 'cs.rin']
+                    page:  [C.green,  'page',   'Steam app ID extracted from the FitGirl page DOM'],
+                    steam: [C.accent, 'search', 'Resolved via Steam store search by title'],
+                    csrin: [C.yellow, 'cs.rin', 'Resolved via the CS.RIN.RU discussion thread']
                 };
-                const [col, label] = badgeMap[tier] || [C.txt3, tier];
-                this._setBadge(label, col);
+                const [col, label, tip] = badgeMap[tier] || [C.txt3, tier, ''];
+                this._setBadge(label, col, tip);
+                const entry = { steamUrl: url };
+                Utils.setCache(this.path, entry);
                 await this._display(url);
+                // Persist any rating/review data accumulated during display
+                if (this._ratingForCache)  entry.ratingData  = this._ratingForCache;
+                if (this._reviewsForCache) entry.reviewsData = this._reviewsForCache;
+                if (entry.ratingData || entry.reviewsData) Utils.setCache(this.path, entry);
             } catch (e) {
                 console.error('[SE]', e);
                 this._setBody(`
@@ -501,18 +507,10 @@
                 this.body.querySelector('#se-retry')?.addEventListener('click', () => this._refresh());
             }
         }
-        // ── 4-Tier URL resolution ────────────────────────────────────────────
+        // ── 3-Tier URL resolution ────────────────────────────────────────────
         async _fetchUrl() {
             const domUrl = this._fromPageDom();
             if (domUrl) return { url: domUrl, tier: 'page' };
-            if (this.riotLink?.href) {
-                try {
-                    const url = await this._fromRiotPixels(this.riotLink.href);
-                    if (url) return { url, tier: 'riotpixels' };
-                } catch (e) {
-                    console.warn('[SE] RiotPixels failed:', e.message);
-                }
-            }
             try {
                 const title = Utils.extractTitle();
                 if (title) {
@@ -522,23 +520,25 @@
             } catch (e) {
                 console.warn('[SE] Steam search failed:', e.message);
             }
-            const r = await API.csrin(this.link.href);
-            if (r.status === 401 || r.status === 403) { this._authWall(); return {}; }
-            const m = r.responseText.match(/https?:\/\/store\.steampowered\.com\/app\/\d+[^\s"']*/i);
-            if (!m) throw new Error('Steam URL not found on CS.RIN.RU');
-            return { url: m[0], tier: 'csrin' };
+            if (!this.link) throw new Error('No Steam URL found on page');
+            try {
+                const r = await API.csrin(this.link.href);
+                const m = r.responseText.match(/https?:\/\/store\.steampowered\.com\/app\/\d+[^\s"']*/i);
+                if (!m) throw new Error('Steam URL not found on CS.RIN.RU');
+                return { url: m[0], tier: 'csrin' };
+            } catch (e) {
+                if (/HTTP (401|403)/.test(e.message)) { this._authWall(); return {}; }
+                throw e;
+            }
         }
         _fromPageDom() {
-            const m = document.body.innerHTML.match(/(?:store_trailers|steam\/apps)\/(\d+)\//i);
-            return m ? `https://store.steampowered.com/app/${m[1]}/` : null;
-        }
-        async _fromRiotPixels(riotUrl) {
-            const r = await API.riotpixels(riotUrl);
-            const m = r.responseText.match(
-                /href="(https?:\/\/store\.steampowered\.com\/app\/(\d+)[^"]*)"/i
-            );
-            if (!m) throw new Error('Steam link not found on RiotPixels');
-            return `https://store.steampowered.com/app/${m[2]}/`;
+            // Match a Steam CDN URL whose path encodes the GAME's appid (not a movie's).
+            // Movie thumbnails use a different per-movie ID under store_item_assets/steam/apps/<movieId>/<hash>/movie_*.jpg.
+            // Game-level assets use the real appid under known prefixes: store_trailers, ss_, header, library_, extras, capsule_, page_bg.
+            const re = /(?:steamstatic\.com|steamcdn-a\.akamaihd\.net)[^"'\s]*?(?:store_trailers\/(\d+)\/|steam\/apps\/(\d+)\/(?:ss_|header|library_|extras\/|capsule_|page_bg))/i;
+            const m  = document.body.innerHTML.match(re);
+            const id = m && (m[1] || m[2]);
+            return id ? `https://store.steampowered.com/app/${id}/` : null;
         }
         async _fromSteamSearch(title) {
             if (!title) return null;
@@ -548,8 +548,12 @@
             for (let n = words.length; n >= 1; n--) {
                 const json = await API.steamSearch(words.slice(0, n).join(' '));
                 if (json.items?.length) {
-                    const exact = json.items.find(i => norm(i.name) === target);
-                    const best  = exact || json.items[0];
+                    // Prefer (a) exact normalized match, (b) item whose name CONTAINS the full
+                    // target as a substring (mitigates the wrong-sequel risk when the original
+                    // query has been shortened to find any results), (c) first item.
+                    const exact    = json.items.find(i => norm(i.name) === target);
+                    const contains = !exact && json.items.find(i => norm(i.name).includes(target));
+                    const best     = exact || contains || json.items[0];
                     return `https://store.steampowered.com/app/${best.id}/`;
                 }
             }
@@ -616,12 +620,9 @@
                 const qs = data.query_summary;
                 if (qs) {
                     this._renderRating(qs);
-                    const cached = Utils.getCache(this.path);
-                    if (cached) {
-                        cached.ratingData = qs;
-                        cached.reviewsData = this._reviews;
-                        Utils.setCache(this.path, cached);
-                    }
+                    // Stash for the single cache write performed by _load() at the end.
+                    this._ratingForCache  = qs;
+                    this._reviewsForCache = this._reviews;
                 }
             } catch (e) {
                 console.error('[SE] rating error:', e);
@@ -1047,10 +1048,17 @@
             img.style.transition = 'opacity .15s ease';
             img.style.opacity = '0';
             img.alt = `Screenshot ${current + 1}`;
+            const preload = (idx) => {
+                const u = urls[((idx % urls.length) + urls.length) % urls.length];
+                if (!u) return;
+                const p = new Image();
+                p.src = u;
+            };
             const loadImage = (url) => {
                 img.style.opacity = '0';
                 spinner.style.display = 'inline-block';
                 img.src = url;
+                if (urls.length > 1) { preload(current + 1); preload(current - 1); }
             };
             img.addEventListener('load', () => {
                 spinner.style.display = 'none';
@@ -1075,10 +1083,19 @@
                 loadImage(urls[current]);
                 updateCounter();
             };
+            const cleanup = () => {
+                document.removeEventListener('keydown', onKey);
+                overlay.remove();
+            };
+            const onKey = (e) => {
+                if (e.key === 'Escape')     cleanup();
+                if (e.key === 'ArrowLeft')  navigate(-1);
+                if (e.key === 'ArrowRight') navigate(1);
+            };
             const closeBtn = document.createElement('button');
             closeBtn.className = 'se-lb-close';
             closeBtn.textContent = '✕';
-            closeBtn.onclick = (e) => { e.stopPropagation(); overlay.remove(); };
+            closeBtn.onclick = (e) => { e.stopPropagation(); cleanup(); };
             if (urls.length > 1) {
                 const prevBtn = document.createElement('button');
                 prevBtn.className = 'se-lb-btn';
@@ -1094,25 +1111,13 @@
                 overlay.appendChild(nextBtn);
             }
             img.onclick = (e) => e.stopPropagation();
-            overlay.onclick = () => overlay.remove();
+            overlay.onclick = cleanup;
             overlay.appendChild(spinner);
             overlay.appendChild(img);
             overlay.appendChild(closeBtn);
             overlay.appendChild(counter);
             document.body.appendChild(overlay);
-            const onKey = (e) => {
-                if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', onKey); }
-                if (e.key === 'ArrowLeft')  navigate(-1);
-                if (e.key === 'ArrowRight') navigate(1);
-            };
             document.addEventListener('keydown', onKey);
-            const obs = new MutationObserver(() => {
-                if (!document.body.contains(overlay)) {
-                    document.removeEventListener('keydown', onKey);
-                    obs.disconnect();
-                }
-            });
-            obs.observe(document.body, { childList: true });
         }
         // ── Helpers ──────────────────────────────────────────────────────────
         _panel(id, visible) {
@@ -1151,8 +1156,10 @@
         _refresh() {
             Utils.clearCache(this.path);
             this._reviews = null;
-            this._cachedRating = null;
-            this._cachedReviews = null;
+            this._cachedRating    = null;
+            this._cachedReviews   = null;
+            this._ratingForCache  = null;
+            this._reviewsForCache = null;
             this._screenshotUrls = [];
             this._setBadge('', '');
             this._setBody(`<span class="se-spinner"></span> Refreshing…`);
@@ -1178,8 +1185,18 @@
         }
     });
     // ==================== BOOT ====================
-    if (document.body.classList.contains('single') ||
-        document.querySelector('article.post') && document.querySelectorAll('article.post').length === 1) {
-        new SteamCard().init();
+    const isSinglePost = document.body.classList.contains('single')
+                      || document.querySelectorAll('article.post').length === 1;
+    let activeCard = null;
+    if (isSinglePost) {
+        activeCard = new SteamCard();
+        activeCard.init();
     }
+    // ── Auto-theme: re-detect when the host page changes its body class ──
+    new MutationObserver(() => {
+        if (!activeCard || getThemePref() !== 'auto') return;
+        const next = detectTheme();
+        const cur  = (C === LIGHT) ? 'light' : 'dark';
+        if (next !== cur) activeCard._applyTheme();
+    }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
 })();

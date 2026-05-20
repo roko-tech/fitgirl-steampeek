@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add *)",
+      "Bash(git commit -m 'Allow all riotpixels.com subdomains in @connect *)",
+      "Bash(git push *)"
+    ]
+  }
+}
