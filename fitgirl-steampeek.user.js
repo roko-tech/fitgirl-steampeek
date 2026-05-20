@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FitGirl SteamPeek
 // @namespace    https://github.com/roko-tech/fitgirl-steampeek
-// @version      1.9
+// @version      1.10
 // @description  Peek at Steam ratings, trailers, screenshots, and reviews directly on FitGirl pages
 // @author       roko-tech
 // @license      MIT
@@ -16,13 +16,13 @@
 // @grant        GM_registerMenuCommand
 // @connect      store.steampowered.com
 // @connect      cs.rin.ru
-// @require      https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js
+// @require      https://cdn.jsdelivr.net/npm/hls.js@1.5.15/dist/hls.min.js
 // @run-at       document-end
 // ==/UserScript==
 (function () {
     'use strict';
     const CONFIG = {
-        VERSION: '1.9',
+        VERSION: '1.10',
         CACHE_PREFIX: 'se8:',
         CACHE_EXPIRY_DAYS: 7,
         MAX_COMMENTS: 15,
@@ -190,6 +190,14 @@
             .se-theme-btn:hover { color: ${C.accent}; }
             #se-card::-webkit-scrollbar       { width: 4px; }
             #se-card::-webkit-scrollbar-thumb { background: ${C.accent}; border-radius: 2px; }
+            @media (prefers-reduced-motion: reduce) {
+                .se-spinner   { animation: none; border-top-color: ${C.txt2}; }
+                .se-skeleton  { animation: none; background: ${C.bg2}; }
+                .se-review,
+                .se-lightbox,
+                .se-lightbox img { animation: none; }
+                #se-card *    { transition: none !important; }
+            }
         `;
     }
     injectStyles();
@@ -207,6 +215,7 @@
             } catch { return null; }
         },
         setCache(key, data) {
+            this._evictIfOverLimit();
             try {
                 localStorage.setItem(this.cKey(key), JSON.stringify({ data, ts: new Date().toISOString() }));
             } catch {
@@ -217,17 +226,28 @@
             }
         },
         clearCache(key) { localStorage.removeItem(this.cKey(key)); },
-        _evictOldest() {
+        _listEntries() {
             const entries = [];
             for (let i = 0; i < localStorage.length; i++) {
                 const k = localStorage.key(i);
-                if (k.startsWith(CONFIG.CACHE_PREFIX)) {
+                if (k && k.startsWith(CONFIG.CACHE_PREFIX)) {
                     try {
                         const d = JSON.parse(localStorage.getItem(k));
                         entries.push({ key: k, ts: d.ts || '' });
                     } catch { entries.push({ key: k, ts: '' }); }
                 }
             }
+            return entries;
+        },
+        _evictIfOverLimit() {
+            const entries = this._listEntries();
+            if (entries.length < CONFIG.MAX_CACHE_ENTRIES) return;
+            entries.sort((a, b) => a.ts.localeCompare(b.ts));
+            const toRemove = entries.length - CONFIG.MAX_CACHE_ENTRIES + 1; // make room for one more
+            for (let i = 0; i < toRemove; i++) localStorage.removeItem(entries[i].key);
+        },
+        _evictOldest() {
+            const entries = this._listEntries();
             entries.sort((a, b) => a.ts.localeCompare(b.ts));
             const toRemove = Math.max(1, entries.length - CONFIG.MAX_CACHE_ENTRIES);
             for (let i = 0; i < toRemove; i++) localStorage.removeItem(entries[i].key);
@@ -282,7 +302,9 @@
             return '#f33';
         },
         extractTitle() {
-            return location.pathname.replace(/^\/|\/$/g, '').replace(/-/g, ' ').trim();
+            let path = location.pathname;
+            try { path = decodeURIComponent(path); } catch { /* keep encoded form */ }
+            return path.replace(/^\/|\/$/g, '').replace(/-/g, ' ').trim();
         }
     };
     // ==================== API ====================
@@ -329,8 +351,10 @@
             this._screenshotUrls = [];
             this._cachedRating  = null;
             this._cachedReviews = null;
+            this._cachedDetails = null;
             this._ratingForCache  = null;
             this._reviewsForCache = null;
+            this._detailsForCache = null;
         }
         init() {
             this._findAnchor(({ csrin, anchor }) => {
@@ -456,6 +480,7 @@
             this._reviews = null;
             this._cachedRating  = null;
             this._cachedReviews = null;
+            this._cachedDetails = null;
             this._screenshotUrls = [];
             this._load();
         }
@@ -469,31 +494,37 @@
         async _load() {
             this._ratingForCache  = null;
             this._reviewsForCache = null;
+            this._detailsForCache = null;
             try {
                 const cached = Utils.getCache(this.path);
+                let entry;
                 if (cached?.steamUrl) {
                     this._setBadge('cached', C.txt3, 'Loaded from local cache (7-day TTL)');
-                    if (cached.ratingData) this._cachedRating = cached.ratingData;
+                    if (cached.ratingData)  this._cachedRating  = cached.ratingData;
                     if (cached.reviewsData) this._cachedReviews = cached.reviewsData;
+                    if (cached.detailsData) this._cachedDetails = cached.detailsData;
+                    entry = { ...cached };
                     await this._display(cached.steamUrl);
-                    return;
+                } else {
+                    const { url, tier } = await this._fetchUrl();
+                    if (!url) return;
+                    const badgeMap = {
+                        page:  [C.green,  'page',   'Steam app ID extracted from the FitGirl page DOM'],
+                        steam: [C.accent, 'search', 'Resolved via Steam store search by title'],
+                        csrin: [C.yellow, 'cs.rin', 'Resolved via the CS.RIN.RU discussion thread']
+                    };
+                    const [col, label, tip] = badgeMap[tier] || [C.txt3, tier, ''];
+                    this._setBadge(label, col, tip);
+                    entry = { steamUrl: url };
+                    Utils.setCache(this.path, entry);
+                    await this._display(url);
                 }
-                const { url, tier } = await this._fetchUrl();
-                if (!url) return;
-                const badgeMap = {
-                    page:  [C.green,  'page',   'Steam app ID extracted from the FitGirl page DOM'],
-                    steam: [C.accent, 'search', 'Resolved via Steam store search by title'],
-                    csrin: [C.yellow, 'cs.rin', 'Resolved via the CS.RIN.RU discussion thread']
-                };
-                const [col, label, tip] = badgeMap[tier] || [C.txt3, tier, ''];
-                this._setBadge(label, col, tip);
-                const entry = { steamUrl: url };
-                Utils.setCache(this.path, entry);
-                await this._display(url);
-                // Persist any rating/review data accumulated during display
-                if (this._ratingForCache)  entry.ratingData  = this._ratingForCache;
-                if (this._reviewsForCache) entry.reviewsData = this._reviewsForCache;
-                if (entry.ratingData || entry.reviewsData) Utils.setCache(this.path, entry);
+                // Persist any rating/review/details data freshly fetched during display.
+                let dirty = false;
+                if (this._ratingForCache  && entry.ratingData  !== this._ratingForCache)  { entry.ratingData  = this._ratingForCache;  dirty = true; }
+                if (this._reviewsForCache && entry.reviewsData !== this._reviewsForCache) { entry.reviewsData = this._reviewsForCache; dirty = true; }
+                if (this._detailsForCache && entry.detailsData !== this._detailsForCache) { entry.detailsData = this._detailsForCache; dirty = true; }
+                if (dirty) Utils.setCache(this.path, entry);
             } catch (e) {
                 console.error('[SE]', e);
                 this._setBody(`
@@ -546,6 +577,7 @@
             const target = norm(title);
             const words  = title.split(/\s+/);
             for (let n = words.length; n >= 1; n--) {
+                if (n < words.length) await new Promise(r => setTimeout(r, 200));
                 const json = await API.steamSearch(words.slice(0, n).join(' '));
                 if (json.items?.length) {
                     // Prefer (a) exact normalized match, (b) item whose name CONTAINS the full
@@ -661,7 +693,7 @@
             if (!slot) return;
             const col = Utils.metacriticColor(mc.score);
             const badge = document.createElement('a');
-            badge.href = mc.url || '#';
+            badge.href = (mc.url && /^https?:\/\//i.test(mc.url)) ? mc.url : '#';
             badge.target = '_blank';
             badge.rel = 'noopener noreferrer';
             badge.title = `Metacritic: ${mc.score}`;
@@ -708,8 +740,21 @@
         // ── Media panels ─────────────────────────────────────────────────────
         async _loadMedia(id) {
             try {
-                const det  = await API.appDetails(id);
-                const d    = det[id]?.data;
+                let d;
+                if (this._cachedDetails) {
+                    d = this._cachedDetails;
+                    this._cachedDetails = null;
+                } else {
+                    const det   = await API.appDetails(id);
+                    const entry = det && det[id];
+                    if (!entry?.success || !entry.data) {
+                        const wrap = this.body.querySelector('#se-media-wrap');
+                        if (wrap) wrap.innerHTML = `<span style="color:${C.txt3};font-size:12px;">⚠ This Steam app is not publicly accessible.</span>`;
+                        return;
+                    }
+                    d = entry.data;
+                    this._detailsForCache = d;
+                }
                 const wrap = this.body.querySelector('#se-media-wrap');
                 if (!d || !wrap) return;
                 this._renderInfoBar(d);
@@ -743,11 +788,12 @@
                         if (activePanel && activePanel !== target) {
                             activePanel.style.opacity = '0';
                             const prev = activePanel;
+                            const delay = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 200;
                             setTimeout(() => {
                                 prev.style.display = 'none';
                                 target.style.display = 'block';
                                 requestAnimationFrame(() => { target.style.opacity = '1'; });
-                            }, 200);
+                            }, delay);
                         } else {
                             wrap.querySelectorAll('.se-panel').forEach(p => { p.style.display = 'none'; p.style.opacity = '0'; });
                             target.style.display = 'block';
@@ -1158,8 +1204,10 @@
             this._reviews = null;
             this._cachedRating    = null;
             this._cachedReviews   = null;
+            this._cachedDetails   = null;
             this._ratingForCache  = null;
             this._reviewsForCache = null;
+            this._detailsForCache = null;
             this._screenshotUrls = [];
             this._setBadge('', '');
             this._setBody(`<span class="se-spinner"></span> Refreshing…`);
@@ -1192,11 +1240,18 @@
         activeCard = new SteamCard();
         activeCard.init();
     }
-    // ── Auto-theme: re-detect when the host page changes its body class ──
+    // ── Auto-theme: re-detect when the host page changes its body class.
+    //    Coalesce bursts of mutations into one check per animation frame to
+    //    avoid running detectTheme() on every class toggle.
+    let themeRaf = 0;
     new MutationObserver(() => {
-        if (!activeCard || getThemePref() !== 'auto') return;
-        const next = detectTheme();
-        const cur  = (C === LIGHT) ? 'light' : 'dark';
-        if (next !== cur) activeCard._applyTheme();
+        if (themeRaf) return;
+        themeRaf = requestAnimationFrame(() => {
+            themeRaf = 0;
+            if (!activeCard || getThemePref() !== 'auto') return;
+            const next = detectTheme();
+            const cur  = (C === LIGHT) ? 'light' : 'dark';
+            if (next !== cur) activeCard._applyTheme();
+        });
     }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
 })();
