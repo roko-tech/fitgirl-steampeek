@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FitGirl SteamPeek
 // @namespace    https://github.com/roko-tech/fitgirl-steampeek
-// @version      1.4
+// @version      1.5
 // @description  Peek at Steam ratings, trailers, screenshots, and reviews directly on FitGirl pages
 // @author       roko-tech
 // @license      MIT
@@ -537,7 +537,7 @@
             return { url: m[0], tier: 'csrin' };
         }
         _fromPageDom() {
-            const m = document.body.innerHTML.match(/store_trailers\/(\d+)\//i);
+            const m = document.body.innerHTML.match(/(?:store_trailers|steam\/apps)\/(\d+)\//i);
             return m ? `https://store.steampowered.com/app/${m[1]}/` : null;
         }
         async _fromRiotPixels(riotUrl) {
