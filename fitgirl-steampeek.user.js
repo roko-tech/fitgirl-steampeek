@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FitGirl SteamPeek
 // @namespace    https://github.com/roko-tech/fitgirl-steampeek
-// @version      1.7
+// @version      1.8
 // @description  Peek at Steam ratings, trailers, screenshots, and reviews directly on FitGirl pages
 // @author       roko-tech
 // @license      MIT
@@ -283,19 +283,7 @@
             return '#f33';
         },
         extractTitle() {
-            const titleEl = document.querySelector('.entry-title');
-            const raw = titleEl?.textContent || document.title || '';
-            return raw
-                .replace(/[–-]\s*fitgirl\s*repacks?\s*$/i, '')
-                .replace(/\[.*?\]/g, '')
-                .replace(/\(.*?\)/g, '')
-                .replace(/\s*\+.*$/, '')
-                .replace(/[,–-]\s*(?:v|build)\s*[\d.]+.*$/i, '')
-                .replace(/,\s+.*$/, '')
-                .replace(/[:–-]\s*[^:–-]*?\bedition\b.*$/i, '')
-                .replace(/repack\s*by.*/i, '')
-                .replace(/[\s,–-]+$/, '')
-                .trim();
+            return location.pathname.replace(/^\/|\/$/g, '').replace(/-/g, ' ').trim();
         }
     };
     // ==================== API ====================
@@ -553,20 +541,19 @@
             return `https://store.steampowered.com/app/${m[2]}/`;
         }
         async _fromSteamSearch(title) {
-            let q = title;
-            let json = await API.steamSearch(q);
-            if (!json.items?.length) {
-                const trimmed = title.split(/[:–-]/)[0].trim();
-                if (trimmed && trimmed !== title) {
-                    q = trimmed;
-                    json = await API.steamSearch(q);
+            if (!title) return null;
+            const norm   = s => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+            const target = norm(title);
+            const words  = title.split(/\s+/);
+            for (let n = words.length; n >= 1; n--) {
+                const json = await API.steamSearch(words.slice(0, n).join(' '));
+                if (json.items?.length) {
+                    const exact = json.items.find(i => norm(i.name) === target);
+                    const best  = exact || json.items[0];
+                    return `https://store.steampowered.com/app/${best.id}/`;
                 }
             }
-            if (!json.items?.length) return null;
-            const norm  = s => s.toLowerCase().replace(/[^a-z0-9]/g, '');
-            const exact = json.items.find(i => norm(i.name) === norm(q));
-            const best  = exact || json.items[0];
-            return `https://store.steampowered.com/app/${best.id}/`;
+            return null;
         }
         // ── Display ─────────────────────────────────────────────────────────
         async _display(steamUrl) {
