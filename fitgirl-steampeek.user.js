@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FitGirl SteamPeek
 // @namespace    https://github.com/roko-tech/fitgirl-steampeek
-// @version      1.6
+// @version      1.7
 // @description  Peek at Steam ratings, trailers, screenshots, and reviews directly on FitGirl pages
 // @author       roko-tech
 // @license      MIT
@@ -286,13 +286,15 @@
             const titleEl = document.querySelector('.entry-title');
             const raw = titleEl?.textContent || document.title || '';
             return raw
-                .replace(/[–-]\s*fitgirl\s*repacks?/i, '')
+                .replace(/[–-]\s*fitgirl\s*repacks?\s*$/i, '')
                 .replace(/\[.*?\]/g, '')
                 .replace(/\(.*?\)/g, '')
-                .replace(/v[\d.]+.*/i, '')
-                .replace(/\+\s*(all|[\d]+)\s*(dlcs?|updates?|extras?|bonus.*)/i, '')
+                .replace(/\s*\+.*$/, '')
+                .replace(/[,–-]\s*(?:v|build)\s*[\d.]+.*$/i, '')
+                .replace(/,\s+.*$/, '')
+                .replace(/[:–-]\s*[^:–-]*?\bedition\b.*$/i, '')
                 .replace(/repack\s*by.*/i, '')
-                .replace(/[,\s]+$/, '')
+                .replace(/[\s,–-]+$/, '')
                 .trim();
         }
     };
@@ -551,10 +553,18 @@
             return `https://store.steampowered.com/app/${m[2]}/`;
         }
         async _fromSteamSearch(title) {
-            const json = await API.steamSearch(title);
+            let q = title;
+            let json = await API.steamSearch(q);
+            if (!json.items?.length) {
+                const trimmed = title.split(/[:–-]/)[0].trim();
+                if (trimmed && trimmed !== title) {
+                    q = trimmed;
+                    json = await API.steamSearch(q);
+                }
+            }
             if (!json.items?.length) return null;
             const norm  = s => s.toLowerCase().replace(/[^a-z0-9]/g, '');
-            const exact = json.items.find(i => norm(i.name) === norm(title));
+            const exact = json.items.find(i => norm(i.name) === norm(q));
             const best  = exact || json.items[0];
             return `https://store.steampowered.com/app/${best.id}/`;
         }
