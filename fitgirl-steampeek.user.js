@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FitGirl SteamPeek
 // @namespace    https://github.com/roko-tech/fitgirl-steampeek
-// @version      1.5
+// @version      1.6
 // @description  Peek at Steam ratings, trailers, screenshots, and reviews directly on FitGirl pages
 // @author       roko-tech
 // @license      MIT
@@ -283,14 +283,16 @@
             return '#f33';
         },
         extractTitle() {
-            const h1 = document.querySelector('h1.entry-title, h1');
-            return (h1?.textContent || document.title || '')
-                .replace(/–\s*fitgirl\s*repacks?/i, '')
+            const titleEl = document.querySelector('.entry-title');
+            const raw = titleEl?.textContent || document.title || '';
+            return raw
+                .replace(/[–-]\s*fitgirl\s*repacks?/i, '')
                 .replace(/\[.*?\]/g, '')
                 .replace(/\(.*?\)/g, '')
                 .replace(/v[\d.]+.*/i, '')
-                .replace(/\+\s*(all|[\d]+)\s*(dlcs?|updates?|extras?).*/i, '')
+                .replace(/\+\s*(all|[\d]+)\s*(dlcs?|updates?|extras?|bonus.*)/i, '')
                 .replace(/repack\s*by.*/i, '')
+                .replace(/[,\s]+$/, '')
                 .trim();
         }
     };
