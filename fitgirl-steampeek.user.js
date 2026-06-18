@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FitGirl SteamPeek
 // @namespace    https://github.com/roko-tech/fitgirl-steampeek
-// @version      1.13
+// @version      1.14
 // @description  Peek at Steam ratings, trailers, screenshots, and reviews directly on FitGirl pages
 // @author       roko-tech
 // @license      MIT
@@ -23,7 +23,7 @@
 (function () {
     'use strict';
     const CONFIG = {
-        VERSION: '1.13',
+        VERSION: '1.14',
         CACHE_PREFIX: 'se8:',
         CACHE_EXPIRY_DAYS: 7,
         MAX_COMMENTS: 15,
@@ -50,6 +50,38 @@
     const THEME_KEY = 'se-theme-pref';
     function getThemePref() { return localStorage.getItem(THEME_KEY) || 'auto'; }
     function setThemePref(v) { localStorage.setItem(THEME_KEY, v); }
+    // ==================== SETTINGS ====================
+    const SETTINGS_KEY = 'se-settings';
+    const SETTINGS_DEFAULTS = {
+        showCompat: true, showFeaturePills: true, showBlurb: true, showPcgw: true,
+        defaultMediaTab: 'trailers', defaultReviewSort: 'helpful', collapseByDefault: false
+    };
+    const Settings = {
+        _cache: null,
+        all() {
+            if (!this._cache) {
+                let stored = {};
+                try { stored = JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; } catch {}
+                this._cache = { ...SETTINGS_DEFAULTS, ...stored };
+            }
+            return this._cache;
+        },
+        get(k) { return this.all()[k]; },
+        set(k, v) {
+            this._cache = { ...this.all(), [k]: v };
+            try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(this._cache)); } catch {}
+        }
+    };
+    const SETTINGS_UI = [
+        { key: 'theme',            label: 'Theme',                              type: 'select', options: ['auto', 'light', 'dark'], proxy: true },
+        { key: 'showCompat',       label: 'ProtonDB / Steam Deck pills',        type: 'toggle' },
+        { key: 'showFeaturePills', label: 'Platform / controller / DLC pills',  type: 'toggle' },
+        { key: 'showBlurb',        label: 'Game description',                   type: 'toggle' },
+        { key: 'showPcgw',         label: 'PCGamingWiki link',                  type: 'toggle' },
+        { key: 'defaultMediaTab',  label: 'Default tab',                        type: 'select', options: ['trailers', 'screenshots', 'reviews', 'sysreq'] },
+        { key: 'defaultReviewSort',label: 'Default review sort',                type: 'select', options: ['helpful', 'recent'] },
+        { key: 'collapseByDefault',label: 'Start collapsed (on reload)',        type: 'toggle' }
+    ];
     function detectTheme() {
         const contentEl = document.querySelector('.entry-content, .post-content, article, .site-content, main, #content')
                        || document.body;
@@ -362,7 +394,8 @@
             this.anchor     = null;
             this.appId      = null;
             this._reviews   = null;
-            this._collapsed = localStorage.getItem('se-collapsed') === '1';
+            this._collapsed = (() => { const s = localStorage.getItem('se-collapsed'); return s !== null ? s === '1' : Settings.get('collapseByDefault'); })();
+            this._settingsOpen = false;
             this._reviewsReady = null;
             this._reviewsResolve = null;
             this._screenshotUrls = [];
@@ -443,6 +476,8 @@
                     <span id="se-badge" style="font-size:10px;padding:1px 6px;border-radius:4px;font-weight:600;"></span>
                 </span>
                 <div style="display:flex;gap:4px;">
+                    <button id="se-settings" title="Settings"
+                        class="se-theme-btn">⚙</button>
                     <button id="se-theme"  title="${themeTitle}"
                         class="se-theme-btn">${themeIcon}</button>
                     <button id="se-toggle"  title="Collapse"
@@ -454,8 +489,17 @@
             const body = document.createElement('div');
             body.id = 'se-body';
             body.style.cssText = 'padding:12px 14px;';
+            const settingsPanel = document.createElement('div');
+            settingsPanel.id = 'se-settings-panel';
+            settingsPanel.style.cssText = `display:${this._settingsOpen ? 'block' : 'none'};padding:11px 14px;border-bottom:1px solid ${C.border};background:${C.bg0};`;
+            this._renderSettingsPanel(settingsPanel);
             card.appendChild(hdr);
+            card.appendChild(settingsPanel);
             card.appendChild(body);
+            hdr.querySelector('#se-settings').onclick = () => {
+                this._settingsOpen = !this._settingsOpen;
+                settingsPanel.style.display = this._settingsOpen ? 'block' : 'none';
+            };
             hdr.querySelector('#se-toggle').onclick = () => {
                 this._collapsed = !this._collapsed;
                 body.style.display = this._collapsed ? 'none' : 'block';
@@ -476,6 +520,56 @@
                 this.anchor.insertBefore(card, this.anchor.firstChild);
             }
             this._setBody(`<span class="se-spinner"></span> Loading Steam data…`);
+        }
+        // ── Settings panel ──────────────────────────────────────────────────
+        _renderSettingsPanel(panel) {
+            panel.innerHTML = `<div style="font-weight:700;color:${C.accent};font-size:12px;margin-bottom:9px;">⚙ Settings</div>`;
+            const rows = document.createElement('div');
+            rows.style.cssText = 'display:flex;flex-direction:column;gap:8px;';
+            SETTINGS_UI.forEach(s => {
+                const cur = s.proxy ? getThemePref() : Settings.get(s.key);
+                const row = document.createElement('label');
+                row.style.cssText = `display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:12px;color:${C.txt2};cursor:pointer;`;
+                row.innerHTML = `<span>${s.label}</span>`;
+                let control;
+                if (s.type === 'toggle') {
+                    control = document.createElement('input');
+                    control.type = 'checkbox';
+                    control.checked = !!cur;
+                    control.style.cssText = `width:15px;height:15px;cursor:pointer;accent-color:${C.accent};flex-shrink:0;`;
+                    control.onchange = () => this._onSettingChange(s, control.checked);
+                } else {
+                    control = document.createElement('select');
+                    control.style.cssText = `font-size:12px;padding:2px 6px;border-radius:5px;background:${C.bg2};color:${C.txt};border:1px solid ${C.border};cursor:pointer;`;
+                    s.options.forEach(o => {
+                        const opt = document.createElement('option');
+                        opt.value = o; opt.textContent = o;
+                        if (o === cur) opt.selected = true;
+                        control.appendChild(opt);
+                    });
+                    control.onchange = () => this._onSettingChange(s, control.value);
+                }
+                row.appendChild(control);
+                rows.appendChild(row);
+            });
+            panel.appendChild(rows);
+            const purge = document.createElement('button');
+            purge.textContent = '🗑 Purge cache & reload';
+            purge.style.cssText = `margin-top:10px;padding:4px 10px;background:${C.bg2};color:${C.txt};border:1px solid ${C.border};border-radius:5px;cursor:pointer;font-size:12px;`;
+            purge.onclick = () => {
+                for (let i = localStorage.length - 1; i >= 0; i--) {
+                    const k = localStorage.key(i);
+                    if (k && k.startsWith(CONFIG.CACHE_PREFIX)) localStorage.removeItem(k);
+                }
+                location.reload();
+            };
+            panel.appendChild(purge);
+        }
+        _onSettingChange(s, val) {
+            if (s.proxy) { setThemePref(val); this._settingsOpen = true; this._applyTheme(); return; }
+            Settings.set(s.key, val);
+            if (s.key === 'collapseByDefault') return; // seeds the next page load only
+            this._load(); // re-render body from cache with the new gates (panel stays open)
         }
         _setBody(html) { this.body.innerHTML = html; }
         _setBadge(label, color, tooltip) {
@@ -652,9 +746,9 @@
                         </a>
                         <button id="se-copy" title="Copy Steam link"
                            style="background:none;border:none;color:${C.txt3};cursor:pointer;font-size:14px;padding:0 2px;line-height:1;">⧉</button>
-                        <a href="https://www.pcgamingwiki.com/api/appid.php?appid=${this.appId}" target="_blank" rel="noopener noreferrer"
+                        ${Settings.get('showPcgw') ? `<a href="https://www.pcgamingwiki.com/api/appid.php?appid=${this.appId}" target="_blank" rel="noopener noreferrer"
                            title="Fixes, DRM/Denuvo & anti-cheat info on PCGamingWiki"
-                           style="font-size:11px;color:${C.txt3};text-decoration:underline;">🔧 PCGamingWiki</a>
+                           style="font-size:11px;color:${C.txt3};text-decoration:underline;">🔧 PCGamingWiki</a>` : ''}
                         <a id="se-wrong" href="#" title="Not the right game? Enter the correct Steam URL"
                            style="font-size:11px;color:${C.txt3};text-decoration:underline;cursor:pointer;">Wrong game?</a>
                     </span>
@@ -802,6 +896,7 @@
                 parts.push(pills);
             }
             // Platform / feature / DLC / maturity signals — all from the already-fetched appdetails.
+            if (Settings.get('showFeaturePills')) {
             const plat = d.platforms || {};
             const platIcons = [plat.windows && '🪟', plat.mac && '🍎', plat.linux && '🐧'].filter(Boolean).join(' ');
             if (platIcons) parts.push(`<span class="se-genre-pill" title="Available platforms">${platIcons}</span>`);
@@ -820,6 +915,7 @@
             if (d.required_age >= 17 || d.content_descriptors?.ids?.length) {
                 parts.push(`<span class="se-genre-pill" style="border-color:${C.yellow};color:${C.yellow};" title="Mature content">🔞 Mature</span>`);
             }
+            } // end showFeaturePills
             if (!parts.length) return;
             bar.style.cssText = `
                 display:flex;align-items:center;gap:8px;flex-wrap:wrap;
@@ -832,6 +928,7 @@
         }
         // ── Short description blurb ──────────────────────────────────────────
         _renderBlurb(d) {
+            if (!Settings.get('showBlurb')) return;
             const el = this.body.querySelector('#se-blurb');
             if (!el || !d.short_description) return;
             el.style.cssText = `font-size:12px;color:${C.txt2};line-height:1.5;margin:-2px 0 12px;
@@ -840,6 +937,7 @@
         }
         // ── Steam Deck / Proton compatibility ───────────────────────────────
         async _loadCompat(id, gen) {
+            if (!Settings.get('showCompat')) return;
             if (this._cachedCompat) { this._renderCompat(this._cachedCompat); this._cachedCompat = null; return; }
             const [proton, deck] = await Promise.allSettled([API.protonDb(id), API.deckCompat(id)]);
             if (gen !== this._gen) return;
@@ -927,20 +1025,22 @@
                 const tabs = [
                     movies.length && { id: 'se-trailers',    label: `🎬 Trailers (${movies.length})` },
                     shots.length  && { id: 'se-screenshots', label: `📸 Screenshots (${shots.length})` },
-                    revs.length   && { id: 'se-reviews',     label: `💬 Most Helpful (${revs.length})` },
+                    revs.length   && { id: 'se-reviews',     label: `💬 Reviews (${revs.length})` },
                     sysReq        && { id: 'se-sysreq',      label: `🖥 System Reqs` }
                 ].filter(Boolean);
                 if (!tabs.length) {
                     wrap.innerHTML = `<span style="color:${C.txt3};font-size:12px;">No media available.</span>`;
                     return;
                 }
+                const wantId = 'se-' + Settings.get('defaultMediaTab');
+                const activeId = tabs.some(t => t.id === wantId) ? wantId : tabs[0].id;
                 wrap.innerHTML = '';
                 const tabBar = document.createElement('div');
                 tabBar.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;';
                 let activePanel = null;
                 tabs.forEach((t, i) => {
                     const btn = document.createElement('button');
-                    btn.className = 'se-tab' + (i === 0 ? ' active' : '');
+                    btn.className = 'se-tab' + (t.id === activeId ? ' active' : '');
                     btn.textContent = t.label;
                     btn.onclick = () => {
                         tabBar.querySelectorAll('.se-tab').forEach(b => b.classList.remove('active'));
@@ -972,8 +1072,8 @@
                         url: Utils.forceHttps(m.hls_h264 || m.dash_h264 || m.webm?.max || m.mp4?.max || m.webm?.['480'] || m.mp4?.['480'] || ''),
                         name: m.name || `Trailer ${i + 1}`
                     }));
-                    const panel = this._panel('se-trailers', true);
-                    activePanel = panel;
+                    const panel = this._panel('se-trailers', activeId === 'se-trailers');
+                    if (activeId === 'se-trailers') activePanel = panel;
                     const grid  = document.createElement('div');
                     grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;';
                     movies.forEach((m, i) => {
@@ -1014,8 +1114,8 @@
                 }
                 // ── Screenshots ──
                 if (shots.length) {
-                    const panel = this._panel('se-screenshots', !movies.length);
-                    if (!movies.length) activePanel = panel;
+                    const panel = this._panel('se-screenshots', activeId === 'se-screenshots');
+                    if (activeId === 'se-screenshots') activePanel = panel;
                     const grid  = document.createElement('div');
                     grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:8px;';
                     shots.forEach((s, idx) => {
@@ -1033,17 +1133,17 @@
                 }
                 // ── Most Helpful Reviews ──
                 if (revs.length) {
-                    const panel = this._panel('se-reviews', !movies.length && !shots.length);
-                    if (!movies.length && !shots.length) activePanel = panel;
+                    const panel = this._panel('se-reviews', activeId === 'se-reviews');
+                    if (activeId === 'se-reviews') activePanel = panel;
                     panel.style.maxHeight   = '400px';
                     panel.style.overflowY   = 'auto';
                     panel.style.paddingRight = '4px';
-                    this._buildReviewsPanel(panel, revs);
+                    this._buildReviewsPanel(panel, revs, gen);
                     wrap.appendChild(panel);
                 }
                 // ── System Requirements ──
                 if (sysReq) {
-                    const visible = !movies.length && !shots.length && !revs.length;
+                    const visible = activeId === 'se-sysreq';
                     const panel = this._panel('se-sysreq', visible);
                     if (visible) activePanel = panel;
                     panel.style.maxHeight   = '400px';
@@ -1061,8 +1161,8 @@
             }
         }
         // ── Reviews panel (filter/sort + render) ─────────────────────────────
-        _buildReviewsPanel(panel, revs) {
-            const state = { filter: 'helpful', review_type: 'all' };
+        _buildReviewsPanel(panel, revs, gen) {
+            const state = { filter: Settings.get('defaultReviewSort'), review_type: 'all' };
             const chipRow = document.createElement('div');
             chipRow.style.cssText = `display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px;
                 position:sticky;top:0;background:${C.bg1};padding-bottom:6px;z-index:1;`;
@@ -1096,7 +1196,15 @@
                 .forEach(([l, k, v]) => chipRow.appendChild(mkChip(l, k, v)));
             panel.appendChild(chipRow);
             panel.appendChild(list);
-            this._renderReviewList(list, revs);
+            // The prefetched `revs` are the 'helpful' set; if the default sort differs, fetch it.
+            if (state.filter === 'helpful' && state.review_type === 'all') {
+                this._renderReviewList(list, revs);
+            } else {
+                list.innerHTML = `<span class="se-spinner"></span> Loading reviews…`;
+                API.reviews(this.appId, CONFIG.MAX_COMMENTS, state)
+                    .then(data => { if (gen === this._gen) this._renderReviewList(list, data.reviews || []); })
+                    .catch(() => { if (gen === this._gen) this._renderReviewList(list, revs); });
+            }
         }
         _renderReviewList(list, revs) {
             list.innerHTML = '';

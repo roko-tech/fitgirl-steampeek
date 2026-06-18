@@ -13,6 +13,7 @@ A userscript that adds a compact Steam info card to FitGirl Repacks pages, givin
 - **Price & Savings** — current Steam price, live discount, or “Free to Play”
 - **System Requirements** — minimum/recommended specs in a dedicated tab
 - **Manual Override** — a “Wrong game?” link to set the correct Steam app when resolution misses
+- **Settings** — a ⚙ panel to toggle sections (compat pills, feature pills, description, PCGamingWiki), pick the default tab/review sort/theme, and start collapsed
 - **Game Info Bar** — price, release date, developer, genres, plus platform / controller / co-op / DLC / maturity signals and a short description
 - **Trailers** — watch Steam trailers in a fullscreen lightbox with HLS streaming support, navigate between trailers with arrow keys
 - **Screenshots** — browse screenshots in a lightbox overlay with keyboard navigation
