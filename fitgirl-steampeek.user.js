@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FitGirl SteamPeek
 // @namespace    https://github.com/roko-tech/fitgirl-steampeek
-// @version      1.12
+// @version      1.13
 // @description  Peek at Steam ratings, trailers, screenshots, and reviews directly on FitGirl pages
 // @author       roko-tech
 // @license      MIT
@@ -23,7 +23,7 @@
 (function () {
     'use strict';
     const CONFIG = {
-        VERSION: '1.12',
+        VERSION: '1.13',
         CACHE_PREFIX: 'se8:',
         CACHE_EXPIRY_DAYS: 7,
         MAX_COMMENTS: 15,
@@ -374,6 +374,7 @@
             this._detailsForCache = null;
             this._cachedCompat    = null;
             this._compatForCache  = null;
+            this._gen = 0;
         }
         init() {
             this._findAnchor(({ csrin, anchor }) => {
@@ -517,6 +518,7 @@
         }
         // ── Load orchestrator ───────────────────────────────────────────────
         async _load() {
+            const gen = ++this._gen;
             this._ratingForCache  = null;
             this._reviewsForCache = null;
             this._detailsForCache = null;
@@ -531,7 +533,7 @@
                     if (cached.detailsData) this._cachedDetails = cached.detailsData;
                     if (cached.compatData)  this._cachedCompat  = cached.compatData;
                     entry = { ...cached };
-                    await this._display(cached.steamUrl);
+                    await this._display(cached.steamUrl, gen);
                 } else {
                     const { url, tier } = await this._fetchUrl();
                     if (!url) return;
@@ -544,8 +546,9 @@
                     this._setBadge(label, col, tip);
                     entry = { steamUrl: url };
                     Utils.setCache(this.path, entry);
-                    await this._display(url);
+                    await this._display(url, gen);
                 }
+                if (gen !== this._gen) return;
                 // Persist any rating/review/details data freshly fetched during display.
                 let dirty = false;
                 if (this._ratingForCache  && entry.ratingData  !== this._ratingForCache)  { entry.ratingData  = this._ratingForCache;  dirty = true; }
@@ -629,7 +632,7 @@
             return null;
         }
         // ── Display ─────────────────────────────────────────────────────────
-        async _display(steamUrl) {
+        async _display(steamUrl, gen) {
             const idMatch = steamUrl.match(/app\/(\d+)/);
             if (!idMatch) return;
             this.appId = idMatch[1];
@@ -649,6 +652,9 @@
                         </a>
                         <button id="se-copy" title="Copy Steam link"
                            style="background:none;border:none;color:${C.txt3};cursor:pointer;font-size:14px;padding:0 2px;line-height:1;">⧉</button>
+                        <a href="https://www.pcgamingwiki.com/api/appid.php?appid=${this.appId}" target="_blank" rel="noopener noreferrer"
+                           title="Fixes, DRM/Denuvo & anti-cheat info on PCGamingWiki"
+                           style="font-size:11px;color:${C.txt3};text-decoration:underline;">🔧 PCGamingWiki</a>
                         <a id="se-wrong" href="#" title="Not the right game? Enter the correct Steam URL"
                            style="font-size:11px;color:${C.txt3};text-decoration:underline;cursor:pointer;">Wrong game?</a>
                     </span>
@@ -687,23 +693,25 @@
                 if (b) { b.textContent = '✓'; setTimeout(() => { b.textContent = '⧉'; }, 1200); }
             });
             await Promise.allSettled([
-                this._loadRatingAndReviews(this.appId),
-                this._loadMedia(this.appId),
-                this._loadCompat(this.appId)
+                this._loadRatingAndReviews(this.appId, gen),
+                this._loadMedia(this.appId, gen),
+                this._loadCompat(this.appId, gen)
             ]);
         }
         // ── Rating + Reviews ────────────────────────────────────────────────
-        async _loadRatingAndReviews(id) {
+        async _loadRatingAndReviews(id, gen) {
+            const resolve = this._reviewsResolve;
             try {
                 if (this._cachedRating && this._cachedReviews) {
                     this._reviews = this._cachedReviews;
                     this._renderRating(this._cachedRating);
-                    this._reviewsResolve?.();
+                    resolve?.();
                     this._cachedRating = null;
                     this._cachedReviews = null;
                     return;
                 }
                 const data = await API.reviews(id, CONFIG.MAX_COMMENTS);
+                if (gen !== this._gen) return;
                 this._reviews = data.reviews || [];
                 const qs = data.query_summary;
                 if (qs) {
@@ -713,13 +721,14 @@
                     this._reviewsForCache = this._reviews;
                 }
             } catch (e) {
+                if (gen !== this._gen) return;
                 console.error('[SE] rating error:', e);
                 const ratingEl = this.body.querySelector('#se-rating-inline');
                 if (ratingEl) {
                     ratingEl.innerHTML = `<span style="color:${C.txt3};font-size:12px;">Rating unavailable</span>`;
                 }
             } finally {
-                this._reviewsResolve?.();
+                resolve?.();
             }
         }
         _renderRating(qs) {
@@ -830,9 +839,10 @@
             el.textContent = d.short_description;
         }
         // ── Steam Deck / Proton compatibility ───────────────────────────────
-        async _loadCompat(id) {
+        async _loadCompat(id, gen) {
             if (this._cachedCompat) { this._renderCompat(this._cachedCompat); this._cachedCompat = null; return; }
             const [proton, deck] = await Promise.allSettled([API.protonDb(id), API.deckCompat(id)]);
+            if (gen !== this._gen) return;
             const compat = { proton: null, deck: null };
             if (proton.status === 'fulfilled' && proton.value?.tier) {
                 compat.proton = { tier: proton.value.tier, total: proton.value.total || 0 };
@@ -883,7 +893,7 @@
             return out;
         }
         // ── Media panels ─────────────────────────────────────────────────────
-        async _loadMedia(id) {
+        async _loadMedia(id, gen) {
             try {
                 let d;
                 if (this._cachedDetails) {
@@ -900,6 +910,7 @@
                     d = entry.data;
                     this._detailsForCache = d;
                 }
+                if (gen !== this._gen) return;
                 const wrap = this.body.querySelector('#se-media-wrap');
                 if (!d || !wrap) return;
                 this._renderInfoBar(d);
@@ -908,6 +919,7 @@
                 const shots  = (d.screenshots || []).slice(0, CONFIG.MAX_SCREENSHOTS);
                 this._screenshotUrls = shots.map(s => s.path_full);
                 await this._reviewsReady;
+                if (gen !== this._gen) return;
                 // Render Metacritic after the rating renders its #se-metacritic-slot (created in _renderRating).
                 this._renderMetacritic(d.metacritic);
                 const revs = this._reviews || [];
@@ -955,10 +967,11 @@
                 wrap.appendChild(tabBar);
                 // ── Trailers ──
                 if (movies.length) {
+                    // Keep _trailers index-aligned with `movies` (and the grid) so a click maps by index, not by name.
                     this._trailers = movies.map((m, i) => ({
                         url: Utils.forceHttps(m.hls_h264 || m.dash_h264 || m.webm?.max || m.mp4?.max || m.webm?.['480'] || m.mp4?.['480'] || ''),
                         name: m.name || `Trailer ${i + 1}`
-                    })).filter(t => t.url);
+                    }));
                     const panel = this._panel('se-trailers', true);
                     activePanel = panel;
                     const grid  = document.createElement('div');
@@ -992,8 +1005,7 @@
                             e.preventDefault();
                             e.stopPropagation();
                             if (!videoUrl) return;
-                            const idx = this._trailers.findIndex(t => t.name === (m.name || `Trailer ${i + 1}`));
-                            this._showVideoLightbox(idx >= 0 ? idx : 0);
+                            this._showVideoLightbox(i);
                         });
                         grid.appendChild(card);
                     });

@@ -9,6 +9,7 @@ A userscript that adds a compact Steam info card to FitGirl Repacks pages, givin
 - **Steam Ratings** — star rating, review score, positive percentage bar
 - **Metacritic Score** — colored badge (green/yellow/red) linked to the Metacritic page
 - **Steam Deck & Proton** — ProtonDB community tier and Valve's official Steam Deck verdict (Verified/Playable/Unsupported)
+- **PCGamingWiki** — one-click link to the game's fixes, DRM/Denuvo, and anti-cheat info
 - **Price & Savings** — current Steam price, live discount, or “Free to Play”
 - **System Requirements** — minimum/recommended specs in a dedicated tab
 - **Manual Override** — a “Wrong game?” link to set the correct Steam app when resolution misses
