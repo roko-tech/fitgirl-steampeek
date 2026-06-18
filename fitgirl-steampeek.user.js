@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FitGirl SteamPeek
 // @namespace    https://github.com/roko-tech/fitgirl-steampeek
-// @version      1.10
+// @version      1.11
 // @description  Peek at Steam ratings, trailers, screenshots, and reviews directly on FitGirl pages
 // @author       roko-tech
 // @license      MIT
@@ -16,13 +16,14 @@
 // @grant        GM_registerMenuCommand
 // @connect      store.steampowered.com
 // @connect      cs.rin.ru
+// @connect      www.protondb.com
 // @require      https://cdn.jsdelivr.net/npm/hls.js@1.5.15/dist/hls.min.js
 // @run-at       document-end
 // ==/UserScript==
 (function () {
     'use strict';
     const CONFIG = {
-        VERSION: '1.10',
+        VERSION: '1.11',
         CACHE_PREFIX: 'se8:',
         CACHE_EXPIRY_DAYS: 7,
         MAX_COMMENTS: 15,
@@ -335,6 +336,14 @@
         async steamSearch(title) {
             const r = await this.req({ method: 'GET', url: `https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(title)}&l=en&cc=US` });
             return JSON.parse(r.responseText);
+        },
+        async deckCompat(id) {
+            const r = await this.req({ method: 'GET', url: `https://store.steampowered.com/saleaction/ajaxgetdeckappcompatibilityreport?nAppID=${id}&l=english` });
+            return JSON.parse(r.responseText);
+        },
+        async protonDb(id) {
+            const r = await this.req({ method: 'GET', url: `https://www.protondb.com/api/v1/reports/summaries/${id}.json` });
+            return JSON.parse(r.responseText);
         }
     };
     // ==================== MAIN CLASS ====================
@@ -345,7 +354,7 @@
             this.anchor     = null;
             this.appId      = null;
             this._reviews   = null;
-            this._collapsed = false;
+            this._collapsed = localStorage.getItem('se-collapsed') === '1';
             this._reviewsReady = null;
             this._reviewsResolve = null;
             this._screenshotUrls = [];
@@ -440,7 +449,12 @@
                 this._collapsed = !this._collapsed;
                 body.style.display = this._collapsed ? 'none' : 'block';
                 hdr.querySelector('#se-toggle').textContent = this._collapsed ? '▸' : '▾';
+                localStorage.setItem('se-collapsed', this._collapsed ? '1' : '0');
             };
+            if (this._collapsed) {
+                body.style.display = 'none';
+                hdr.querySelector('#se-toggle').textContent = '▸';
+            }
             hdr.querySelector('#se-refresh').onclick = () => this._refresh();
             hdr.querySelector('#se-theme').onclick = () => this._cycleTheme();
             this.card = card;
@@ -499,7 +513,7 @@
                 const cached = Utils.getCache(this.path);
                 let entry;
                 if (cached?.steamUrl) {
-                    this._setBadge('cached', C.txt3, 'Loaded from local cache (7-day TTL)');
+                    this._setBadge(cached.manual ? 'manual' : 'cached', cached.manual ? C.accent : C.txt3, cached.manual ? 'Manually set Steam app ID' : 'Loaded from local cache (7-day TTL)');
                     if (cached.ratingData)  this._cachedRating  = cached.ratingData;
                     if (cached.reviewsData) this._cachedReviews = cached.reviewsData;
                     if (cached.detailsData) this._cachedDetails = cached.detailsData;
@@ -534,8 +548,17 @@
                                border:1px solid ${C.border};border-radius:5px;cursor:pointer;font-size:12px;">
                         Retry
                     </button>
+                    <button id="se-manual"
+                        style="margin-left:6px;padding:4px 12px;background:${C.bg2};color:${C.txt};
+                               border:1px solid ${C.border};border-radius:5px;cursor:pointer;font-size:12px;">
+                        Enter Steam URL
+                    </button>
                 `);
                 this.body.querySelector('#se-retry')?.addEventListener('click', () => this._refresh());
+                this.body.querySelector('#se-manual')?.addEventListener('click', () => {
+                    const v = prompt('Paste the correct Steam store URL or appID:');
+                    if (v) this._applyManual(v);
+                });
             }
         }
         // ── 3-Tier URL resolution ────────────────────────────────────────────
@@ -599,16 +622,20 @@
             const isLight = C === LIGHT;
             this._setBody(`
                 <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
-                    <a href="${Utils.escHtml(steamUrl)}" target="_blank" rel="noopener noreferrer"
-                       style="display:inline-flex;align-items:center;gap:6px;padding:5px 14px;
-                              background:linear-gradient(135deg,${C.accentDark},${isLight ? '#b6d4f0' : '#2a475e'});
-                              color:${isLight ? C.accent : 'white'};text-decoration:none;border-radius:6px;
-                              font-weight:700;font-size:13px;border:1px solid ${C.accent};">
-                        <svg width="13" height="13" viewBox="0 0 24 24">
-                            <path fill="${isLight ? C.accent : 'white'}" d="M12,2C6.48,2,2,6.48,2,12s4.48,10,10,10s10-4.48,10-10S17.52,2,12,2z"/>
-                        </svg>
-                        Steam Store
-                    </a>
+                    <span style="display:inline-flex;align-items:center;gap:10px;">
+                        <a href="${Utils.escHtml(steamUrl)}" target="_blank" rel="noopener noreferrer"
+                           style="display:inline-flex;align-items:center;gap:6px;padding:5px 14px;
+                                  background:linear-gradient(135deg,${C.accentDark},${isLight ? '#b6d4f0' : '#2a475e'});
+                                  color:${isLight ? C.accent : 'white'};text-decoration:none;border-radius:6px;
+                                  font-weight:700;font-size:13px;border:1px solid ${C.accent};">
+                            <svg width="13" height="13" viewBox="0 0 24 24">
+                                <path fill="${isLight ? C.accent : 'white'}" d="M12,2C6.48,2,2,6.48,2,12s4.48,10,10,10s10-4.48,10-10S17.52,2,12,2z"/>
+                            </svg>
+                            Steam Store
+                        </a>
+                        <a id="se-wrong" href="#" title="Not the right game? Enter the correct Steam URL"
+                           style="font-size:11px;color:${C.txt3};text-decoration:underline;cursor:pointer;">Wrong game?</a>
+                    </span>
                     <span id="se-rating-inline" style="font-size:12px;color:${C.txt2};display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
                         <span class="se-skeleton" style="width:180px;height:14px;display:inline-block;"></span>
                     </span>
@@ -616,6 +643,7 @@
                 <div id="se-rating-bar" style="margin-bottom:12px;">
                     <div class="se-skeleton" style="height:4px;"></div>
                 </div>
+                <div id="se-compat-bar"></div>
                 <div id="se-info-bar"></div>
                 <div id="se-media-wrap">
                     <div style="display:flex;gap:6px;margin-bottom:10px;">
@@ -631,9 +659,15 @@
                 </div>
             `);
             this._reviewsReady = new Promise(resolve => { this._reviewsResolve = resolve; });
+            this.body.querySelector('#se-wrong')?.addEventListener('click', (e) => {
+                e.preventDefault();
+                const v = prompt('Paste the correct Steam store URL or appID:');
+                if (v) this._applyManual(v);
+            });
             await Promise.allSettled([
                 this._loadRatingAndReviews(this.appId),
-                this._loadMedia(this.appId)
+                this._loadMedia(this.appId),
+                this._loadCompat(this.appId)
             ]);
         }
         // ── Rating + Reviews ────────────────────────────────────────────────
@@ -713,6 +747,15 @@
             const bar = this.body.querySelector('#se-info-bar');
             if (!bar) return;
             const parts = [];
+            if (d.is_free) {
+                parts.push(`<span class="se-genre-pill" style="border-color:${C.green};color:${C.green};">🆓 Free to Play</span>`);
+            } else if (d.price_overview) {
+                const p = d.price_overview;
+                const price = p.discount_percent > 0
+                    ? `<span style="color:${C.green};font-weight:700;">-${p.discount_percent}%</span> <s style="color:${C.txt3};">${Utils.escHtml(p.initial_formatted)}</s> <b>${Utils.escHtml(p.final_formatted)}</b>`
+                    : `<b>${Utils.escHtml(p.final_formatted)}</b>`;
+                parts.push(`<span style="color:${C.txt2};">💲 ${price}</span>`);
+            }
             if (d.release_date?.date) {
                 parts.push(`<span style="color:${C.txt2};">📅 ${Utils.escHtml(d.release_date.date)}</span>`);
             }
@@ -736,6 +779,46 @@
                 font-size:12px;
             `;
             bar.innerHTML = parts.join(`<span style="color:${C.txt3};">·</span>`);
+        }
+        // ── Steam Deck / Proton compatibility ───────────────────────────────
+        async _loadCompat(id) {
+            const bar = this.body.querySelector('#se-compat-bar');
+            if (!bar) return;
+            const [proton, deck] = await Promise.allSettled([API.protonDb(id), API.deckCompat(id)]);
+            const pills = [];
+            if (proton.status === 'fulfilled' && proton.value?.tier) {
+                const t = proton.value;
+                const map = { platinum: '#dfe6ee', gold: '#cfb53b', silver: '#9aa4ad', bronze: '#cd7f32', borked: C.red, native: C.green, pending: C.txt3 };
+                const col = map[t.tier] || C.txt2;
+                const label = t.tier.charAt(0).toUpperCase() + t.tier.slice(1);
+                pills.push(`<span class="se-genre-pill" title="ProtonDB community rating${t.total ? ` · ${t.total} reports` : ''}" style="border-color:${col};color:${col};">🐧 Proton: ${label}</span>`);
+            }
+            if (deck.status === 'fulfilled') {
+                const cat = deck.value?.results?.resolved_category;
+                const dmap = { 1: ['Unsupported', C.red], 2: ['Playable', C.yellow], 3: ['Verified', C.green] };
+                if (dmap[cat]) {
+                    const [txt, col] = dmap[cat];
+                    pills.push(`<span class="se-genre-pill" title="Steam Deck compatibility (Valve)" style="border-color:${col};color:${col};">🎮 Deck: ${txt}</span>`);
+                }
+            }
+            if (!pills.length) return;
+            bar.style.cssText = `display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:12px;`;
+            bar.innerHTML = pills.join('');
+        }
+        // ── System requirements (sanitized to text) ─────────────────────────
+        _renderSysReq(req) {
+            const out = document.createElement('div');
+            out.style.cssText = `font-size:12px;color:${C.txt2};line-height:1.6;`;
+            const fmt = (html) => {
+                const tmp = document.createElement('div');
+                tmp.innerHTML = String(html).replace(/<br\s*\/?>/gi, '\n').replace(/<\/(li|p|div|ul)>/gi, '\n');
+                return (tmp.textContent || '').replace(/\n{2,}/g, '\n').trim();
+            };
+            const parts = [];
+            if (req.minimum) parts.push(fmt(req.minimum));
+            if (req.recommended) parts.push(fmt(req.recommended));
+            out.innerHTML = `<pre style="white-space:pre-wrap;font-family:inherit;margin:0;">${Utils.escHtml(parts.join('\n\n'))}</pre>`;
+            return out;
         }
         // ── Media panels ─────────────────────────────────────────────────────
         async _loadMedia(id) {
@@ -764,10 +847,12 @@
                 this._screenshotUrls = shots.map(s => s.path_full);
                 await this._reviewsReady;
                 const revs = this._reviews || [];
+                const sysReq = d.pc_requirements?.minimum ? d.pc_requirements : null;
                 const tabs = [
                     movies.length && { id: 'se-trailers',    label: `🎬 Trailers (${movies.length})` },
                     shots.length  && { id: 'se-screenshots', label: `📸 Screenshots (${shots.length})` },
-                    revs.length   && { id: 'se-reviews',     label: `💬 Most Helpful (${revs.length})` }
+                    revs.length   && { id: 'se-reviews',     label: `💬 Most Helpful (${revs.length})` },
+                    sysReq        && { id: 'se-sysreq',      label: `🖥 System Reqs` }
                 ].filter(Boolean);
                 if (!tabs.length) {
                     wrap.innerHTML = `<span style="color:${C.txt3};font-size:12px;">No media available.</span>`;
@@ -948,6 +1033,17 @@
                         }
                         panel.appendChild(div);
                     });
+                    wrap.appendChild(panel);
+                }
+                // ── System Requirements ──
+                if (sysReq) {
+                    const visible = !movies.length && !shots.length && !revs.length;
+                    const panel = this._panel('se-sysreq', visible);
+                    if (visible) activePanel = panel;
+                    panel.style.maxHeight   = '400px';
+                    panel.style.overflowY   = 'auto';
+                    panel.style.paddingRight = '4px';
+                    panel.appendChild(this._renderSysReq(sysReq));
                     wrap.appendChild(panel);
                 }
             } catch (e) {
@@ -1198,6 +1294,22 @@
                 () => GM_openInTab(this.link.href, { active: true }));
             this.body.querySelector('#se-reload')?.addEventListener('click',
                 () => location.reload());
+        }
+        _applyManual(value) {
+            const m = String(value).match(/(\d{3,})/);
+            if (!m) return;
+            Utils.setCache(this.path, { steamUrl: `https://store.steampowered.com/app/${m[1]}/`, manual: true });
+            this._reviews = null;
+            this._cachedRating    = null;
+            this._cachedReviews   = null;
+            this._cachedDetails   = null;
+            this._ratingForCache  = null;
+            this._reviewsForCache = null;
+            this._detailsForCache = null;
+            this._screenshotUrls = [];
+            this._setBadge('', '');
+            this._setBody(`<span class="se-spinner"></span> Loading Steam data…`);
+            this._load();
         }
         _refresh() {
             Utils.clearCache(this.path);

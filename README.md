@@ -8,6 +8,10 @@ A userscript that adds a compact Steam info card to FitGirl Repacks pages, givin
 
 - **Steam Ratings** — star rating, review score, positive percentage bar
 - **Metacritic Score** — colored badge (green/yellow/red) linked to the Metacritic page
+- **Steam Deck & Proton** — ProtonDB community tier and Valve's official Steam Deck verdict (Verified/Playable/Unsupported)
+- **Price & Savings** — current Steam price, live discount, or “Free to Play”
+- **System Requirements** — minimum/recommended specs in a dedicated tab
+- **Manual Override** — a “Wrong game?” link to set the correct Steam app when resolution misses
 - **Game Info Bar** — release date, developer, and genre tags at a glance
 - **Trailers** — watch Steam trailers in a fullscreen lightbox with HLS streaming support, navigate between trailers with arrow keys
 - **Screenshots** — browse screenshots in a lightbox overlay with keyboard navigation
@@ -57,8 +61,9 @@ When you open a game page on FitGirl Repacks, the script:
 
 | Permission | Reason |
 |---|---|
-| `store.steampowered.com` | Fetch game details, reviews, and search |
+| `store.steampowered.com` | Fetch game details, reviews, search, and Steam Deck compatibility |
 | `cs.rin.ru` | Fallback Steam URL extraction (requires login) |
+| `www.protondb.com` | Fetch ProtonDB / Steam Deck Proton compatibility tier |
 | `cdn.jsdelivr.net` | Load hls.js for trailer streaming |
 
 ## Cache Management
