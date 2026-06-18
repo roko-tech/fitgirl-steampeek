@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FitGirl SteamPeek
 // @namespace    https://github.com/roko-tech/fitgirl-steampeek
-// @version      1.11
+// @version      1.12
 // @description  Peek at Steam ratings, trailers, screenshots, and reviews directly on FitGirl pages
 // @author       roko-tech
 // @license      MIT
@@ -23,7 +23,7 @@
 (function () {
     'use strict';
     const CONFIG = {
-        VERSION: '1.11',
+        VERSION: '1.12',
         CACHE_PREFIX: 'se8:',
         CACHE_EXPIRY_DAYS: 7,
         MAX_COMMENTS: 15,
@@ -191,6 +191,12 @@
             .se-theme-btn:hover { color: ${C.accent}; }
             #se-card::-webkit-scrollbar       { width: 4px; }
             #se-card::-webkit-scrollbar-thumb { background: ${C.accent}; border-radius: 2px; }
+            @media (max-width: 480px) {
+                #se-toggle, #se-refresh, .se-theme-btn { font-size: 18px !important; padding: 7px 10px !important; }
+                .se-tab { padding: 6px 12px; }
+                .se-lb-btn   { width: 48px; height: 48px; }
+                .se-lb-close { width: 44px; height: 44px; }
+            }
             @media (prefers-reduced-motion: reduce) {
                 .se-spinner   { animation: none; border-top-color: ${C.txt2}; }
                 .se-skeleton  { animation: none; background: ${C.bg2}; }
@@ -329,8 +335,10 @@
             const r = await this.req({ method: 'GET', url: `https://store.steampowered.com/api/appdetails?appids=${id}&l=en` });
             return JSON.parse(r.responseText);
         },
-        async reviews(id, n = CONFIG.MAX_COMMENTS) {
-            const r = await this.req({ method: 'GET', url: `https://store.steampowered.com/appreviews/${id}?json=1&language=english&filter=helpful&purchase_type=all&num_per_page=${n}` });
+        async reviews(id, n = CONFIG.MAX_COMMENTS, opts = {}) {
+            const filter = opts.filter || 'helpful';
+            const reviewType = opts.review_type || 'all';
+            const r = await this.req({ method: 'GET', url: `https://store.steampowered.com/appreviews/${id}?json=1&language=english&filter=${filter}&review_type=${reviewType}&purchase_type=all&num_per_page=${n}` });
             return JSON.parse(r.responseText);
         },
         async steamSearch(title) {
@@ -364,6 +372,8 @@
             this._ratingForCache  = null;
             this._reviewsForCache = null;
             this._detailsForCache = null;
+            this._cachedCompat    = null;
+            this._compatForCache  = null;
         }
         init() {
             this._findAnchor(({ csrin, anchor }) => {
@@ -495,6 +505,7 @@
             this._cachedRating  = null;
             this._cachedReviews = null;
             this._cachedDetails = null;
+            this._cachedCompat  = null;
             this._screenshotUrls = [];
             this._load();
         }
@@ -509,6 +520,7 @@
             this._ratingForCache  = null;
             this._reviewsForCache = null;
             this._detailsForCache = null;
+            this._compatForCache  = null;
             try {
                 const cached = Utils.getCache(this.path);
                 let entry;
@@ -517,6 +529,7 @@
                     if (cached.ratingData)  this._cachedRating  = cached.ratingData;
                     if (cached.reviewsData) this._cachedReviews = cached.reviewsData;
                     if (cached.detailsData) this._cachedDetails = cached.detailsData;
+                    if (cached.compatData)  this._cachedCompat  = cached.compatData;
                     entry = { ...cached };
                     await this._display(cached.steamUrl);
                 } else {
@@ -538,6 +551,7 @@
                 if (this._ratingForCache  && entry.ratingData  !== this._ratingForCache)  { entry.ratingData  = this._ratingForCache;  dirty = true; }
                 if (this._reviewsForCache && entry.reviewsData !== this._reviewsForCache) { entry.reviewsData = this._reviewsForCache; dirty = true; }
                 if (this._detailsForCache && entry.detailsData !== this._detailsForCache) { entry.detailsData = this._detailsForCache; dirty = true; }
+                if (this._compatForCache  && entry.compatData  !== this._compatForCache)  { entry.compatData  = this._compatForCache;  dirty = true; }
                 if (dirty) Utils.setCache(this.path, entry);
             } catch (e) {
                 console.error('[SE]', e);
@@ -633,6 +647,8 @@
                             </svg>
                             Steam Store
                         </a>
+                        <button id="se-copy" title="Copy Steam link"
+                           style="background:none;border:none;color:${C.txt3};cursor:pointer;font-size:14px;padding:0 2px;line-height:1;">⧉</button>
                         <a id="se-wrong" href="#" title="Not the right game? Enter the correct Steam URL"
                            style="font-size:11px;color:${C.txt3};text-decoration:underline;cursor:pointer;">Wrong game?</a>
                     </span>
@@ -645,6 +661,7 @@
                 </div>
                 <div id="se-compat-bar"></div>
                 <div id="se-info-bar"></div>
+                <div id="se-blurb"></div>
                 <div id="se-media-wrap">
                     <div style="display:flex;gap:6px;margin-bottom:10px;">
                         <div class="se-skeleton" style="width:100px;height:28px;"></div>
@@ -663,6 +680,11 @@
                 e.preventDefault();
                 const v = prompt('Paste the correct Steam store URL or appID:');
                 if (v) this._applyManual(v);
+            });
+            this.body.querySelector('#se-copy')?.addEventListener('click', () => {
+                navigator.clipboard?.writeText(steamUrl);
+                const b = this.body.querySelector('#se-copy');
+                if (b) { b.textContent = '✓'; setTimeout(() => { b.textContent = '⧉'; }, 1200); }
             });
             await Promise.allSettled([
                 this._loadRatingAndReviews(this.appId),
@@ -770,6 +792,25 @@
                 ).join(' ');
                 parts.push(pills);
             }
+            // Platform / feature / DLC / maturity signals — all from the already-fetched appdetails.
+            const plat = d.platforms || {};
+            const platIcons = [plat.windows && '🪟', plat.mac && '🍎', plat.linux && '🐧'].filter(Boolean).join(' ');
+            if (platIcons) parts.push(`<span class="se-genre-pill" title="Available platforms">${platIcons}</span>`);
+            const cats = (d.categories || []).map(c => c.description || '');
+            const hasCat = re => cats.some(c => re.test(c));
+            const feats = [];
+            if (d.controller_support === 'full' || hasCat(/full controller/i)) feats.push('🎮 Controller');
+            else if (hasCat(/partial controller/i)) feats.push('🎮 Partial pad');
+            if (hasCat(/co-?op/i)) feats.push('👥 Co-op');
+            else if (hasCat(/multi-?player|pvp/i)) feats.push('🌐 Multiplayer');
+            else if (hasCat(/single-?player/i)) feats.push('👤 Single-player');
+            if (hasCat(/cloud/i)) feats.push('☁ Cloud');
+            feats.forEach(f => parts.push(`<span class="se-genre-pill">${f}</span>`));
+            if (d.dlc?.length) parts.push(`<span class="se-genre-pill" title="DLC on Steam">🧩 ${d.dlc.length} DLC</span>`);
+            if (d.recommendations?.total) parts.push(`<span class="se-genre-pill" title="Steam recommendations">👍 ${d.recommendations.total.toLocaleString()}</span>`);
+            if (d.required_age >= 17 || d.content_descriptors?.ids?.length) {
+                parts.push(`<span class="se-genre-pill" style="border-color:${C.yellow};color:${C.yellow};" title="Mature content">🔞 Mature</span>`);
+            }
             if (!parts.length) return;
             bar.style.cssText = `
                 display:flex;align-items:center;gap:8px;flex-wrap:wrap;
@@ -780,24 +821,45 @@
             `;
             bar.innerHTML = parts.join(`<span style="color:${C.txt3};">·</span>`);
         }
+        // ── Short description blurb ──────────────────────────────────────────
+        _renderBlurb(d) {
+            const el = this.body.querySelector('#se-blurb');
+            if (!el || !d.short_description) return;
+            el.style.cssText = `font-size:12px;color:${C.txt2};line-height:1.5;margin:-2px 0 12px;
+                display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;`;
+            el.textContent = d.short_description;
+        }
         // ── Steam Deck / Proton compatibility ───────────────────────────────
         async _loadCompat(id) {
-            const bar = this.body.querySelector('#se-compat-bar');
-            if (!bar) return;
+            if (this._cachedCompat) { this._renderCompat(this._cachedCompat); this._cachedCompat = null; return; }
             const [proton, deck] = await Promise.allSettled([API.protonDb(id), API.deckCompat(id)]);
-            const pills = [];
+            const compat = { proton: null, deck: null };
             if (proton.status === 'fulfilled' && proton.value?.tier) {
-                const t = proton.value;
+                compat.proton = { tier: proton.value.tier, total: proton.value.total || 0 };
+            }
+            if (deck.status === 'fulfilled') {
+                const cat = deck.value?.results?.resolved_category;
+                if (cat) compat.deck = cat;
+            }
+            // Stash for the single cache write in _load() so cached pageviews don't re-hit the network.
+            if (compat.proton || compat.deck) this._compatForCache = compat;
+            this._renderCompat(compat);
+        }
+        _renderCompat(compat) {
+            const bar = this.body.querySelector('#se-compat-bar');
+            if (!bar || !compat) return;
+            const pills = [];
+            if (compat.proton?.tier) {
+                const t = compat.proton;
                 const map = { platinum: '#dfe6ee', gold: '#cfb53b', silver: '#9aa4ad', bronze: '#cd7f32', borked: C.red, native: C.green, pending: C.txt3 };
                 const col = map[t.tier] || C.txt2;
                 const label = t.tier.charAt(0).toUpperCase() + t.tier.slice(1);
                 pills.push(`<span class="se-genre-pill" title="ProtonDB community rating${t.total ? ` · ${t.total} reports` : ''}" style="border-color:${col};color:${col};">🐧 Proton: ${label}</span>`);
             }
-            if (deck.status === 'fulfilled') {
-                const cat = deck.value?.results?.resolved_category;
+            if (compat.deck) {
                 const dmap = { 1: ['Unsupported', C.red], 2: ['Playable', C.yellow], 3: ['Verified', C.green] };
-                if (dmap[cat]) {
-                    const [txt, col] = dmap[cat];
+                if (dmap[compat.deck]) {
+                    const [txt, col] = dmap[compat.deck];
                     pills.push(`<span class="se-genre-pill" title="Steam Deck compatibility (Valve)" style="border-color:${col};color:${col};">🎮 Deck: ${txt}</span>`);
                 }
             }
@@ -841,11 +903,13 @@
                 const wrap = this.body.querySelector('#se-media-wrap');
                 if (!d || !wrap) return;
                 this._renderInfoBar(d);
-                this._renderMetacritic(d.metacritic);
+                this._renderBlurb(d);
                 const movies = d.movies || [];
                 const shots  = (d.screenshots || []).slice(0, CONFIG.MAX_SCREENSHOTS);
                 this._screenshotUrls = shots.map(s => s.path_full);
                 await this._reviewsReady;
+                // Render Metacritic after the rating renders its #se-metacritic-slot (created in _renderRating).
+                this._renderMetacritic(d.metacritic);
                 const revs = this._reviews || [];
                 const sysReq = d.pc_requirements?.minimum ? d.pc_requirements : null;
                 const tabs = [
@@ -962,77 +1026,7 @@
                     panel.style.maxHeight   = '400px';
                     panel.style.overflowY   = 'auto';
                     panel.style.paddingRight = '4px';
-                    revs.forEach(rv => {
-                        const col        = rv.voted_up ? C.green : C.red;
-                        const text       = rv.review || '';
-                        const escapedText = Utils.escHtml(text);
-                        const short      = text.length > 180;
-                        const clip       = short ? Utils.escHtml(text.slice(0, 180)) + '…' : escapedText;
-                        const helpScore  = rv.votes_up ?? 0;
-                        let expanded     = false;
-                        const div = document.createElement('div');
-                        div.className = 'se-review';
-                        div.style.borderLeftColor = col;
-                        const username = Utils.escHtml(rv.author?.personaname ?? 'User');
-                        div.innerHTML = `
-                            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
-                                <span class="se-avatar-wrap" style="flex-shrink:0;"></span>
-                                <div style="flex:1;min-width:0;">
-                                    <span style="font-weight:700;font-size:13px;">
-                                        ${username}
-                                    </span>
-                                    <span style="margin-left:6px;font-size:11px;padding:2px 7px;border-radius:10px;
-                                                 color:${col};background:${rv.voted_up ? 'rgba(63,185,80,.18)' : 'rgba(248,81,73,.18)'};">
-                                        ${rv.voted_up ? '✓ Recommended' : '✗ Not Recommended'}
-                                    </span>
-                                </div>
-                                <span style="font-size:11px;color:${C.txt3};flex-shrink:0;">
-                                    ⏱ ${Utils.formatMins(rv.author?.playtime_forever ?? 0)}
-                                    · ${Utils.formatDate(rv.timestamp_created)}
-                                </span>
-                            </div>
-                            <div class="rv-text"
-                                 style="font-size:12px;line-height:1.6;color:${C.txt2};cursor:${short ? 'pointer' : 'default'};"
-                                 title="${short ? 'Click to expand' : ''}">
-                                ${clip}
-                            </div>
-                            <div style="margin-top:7px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-                                <div style="display:flex;align-items:center;gap:4px;font-size:11px;padding:3px 8px;
-                                            border-radius:5px;background:rgba(63,185,80,.12);
-                                            border:1px solid rgba(63,185,80,.25);color:${C.green};">
-                                    👍 <strong>${helpScore.toLocaleString()}</strong> found this helpful
-                                </div>
-                                ${rv.votes_funny > 0 ? `
-                                <div style="font-size:11px;padding:3px 8px;border-radius:5px;
-                                            background:rgba(88,166,255,.1);border:1px solid rgba(88,166,255,.2);color:${C.txt2};">
-                                    😄 ${rv.votes_funny.toLocaleString()} funny
-                                </div>` : ''}
-                                <span style="font-size:11px;color:${C.txt3};margin-left:auto;">
-                                    💬 ${rv.comment_count ?? 0} comments
-                                </span>
-                            </div>
-                        `;
-                        const avatarWrap = div.querySelector('.se-avatar-wrap');
-                        if (rv.author?.avatar) {
-                            const img = document.createElement('img');
-                            img.src = rv.author.avatar;
-                            img.loading = 'lazy';
-                            img.width = 28;
-                            img.height = 28;
-                            img.style.cssText = `border-radius:50%;border:2px solid ${col};`;
-                            img.addEventListener('error', () => { img.style.display = 'none'; });
-                            avatarWrap.appendChild(img);
-                        }
-                        if (short) {
-                            const rvText = div.querySelector('.rv-text');
-                            rvText.onclick = () => {
-                                expanded = !expanded;
-                                rvText.innerHTML = expanded ? escapedText : clip;
-                                rvText.title = expanded ? 'Click to collapse' : 'Click to expand';
-                            };
-                        }
-                        panel.appendChild(div);
-                    });
+                    this._buildReviewsPanel(panel, revs);
                     wrap.appendChild(panel);
                 }
                 // ── System Requirements ──
@@ -1054,15 +1048,137 @@
                 }
             }
         }
+        // ── Reviews panel (filter/sort + render) ─────────────────────────────
+        _buildReviewsPanel(panel, revs) {
+            const state = { filter: 'helpful', review_type: 'all' };
+            const chipRow = document.createElement('div');
+            chipRow.style.cssText = `display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px;
+                position:sticky;top:0;background:${C.bg1};padding-bottom:6px;z-index:1;`;
+            const list = document.createElement('div');
+            const mkChip = (label, key, val) => {
+                const b = document.createElement('button');
+                b.className = 'se-tab' + (state[key] === val ? ' active' : '');
+                b.textContent = label;
+                b.dataset.k = key;
+                b.onclick = async () => {
+                    if (state[key] === val) return;
+                    state[key] = val;
+                    chipRow.querySelectorAll(`[data-k="${key}"]`).forEach(x => x.classList.remove('active'));
+                    b.classList.add('active');
+                    list.innerHTML = `<span class="se-spinner"></span> Loading reviews…`;
+                    try {
+                        const data = await API.reviews(this.appId, CONFIG.MAX_COMMENTS, state);
+                        this._renderReviewList(list, data.reviews || []);
+                    } catch {
+                        list.innerHTML = `<span style="color:${C.txt3};font-size:12px;">Could not load reviews.</span>`;
+                    }
+                };
+                return b;
+            };
+            [['👍 Helpful', 'filter', 'helpful'], ['🕒 Recent', 'filter', 'recent']]
+                .forEach(([l, k, v]) => chipRow.appendChild(mkChip(l, k, v)));
+            const sep = document.createElement('span');
+            sep.style.cssText = `width:1px;align-self:stretch;background:${C.border};margin:0 3px;`;
+            chipRow.appendChild(sep);
+            [['All', 'review_type', 'all'], ['👍 Positive', 'review_type', 'positive'], ['👎 Negative', 'review_type', 'negative']]
+                .forEach(([l, k, v]) => chipRow.appendChild(mkChip(l, k, v)));
+            panel.appendChild(chipRow);
+            panel.appendChild(list);
+            this._renderReviewList(list, revs);
+        }
+        _renderReviewList(list, revs) {
+            list.innerHTML = '';
+            if (!revs.length) {
+                list.innerHTML = `<span style="color:${C.txt3};font-size:12px;">No reviews match this filter.</span>`;
+                return;
+            }
+            revs.forEach(rv => list.appendChild(this._buildReviewEl(rv)));
+        }
+        _buildReviewEl(rv) {
+            const col         = rv.voted_up ? C.green : C.red;
+            const text        = rv.review || '';
+            const escapedText = Utils.escHtml(text);
+            const short       = text.length > 180;
+            const clip        = short ? Utils.escHtml(text.slice(0, 180)) + '…' : escapedText;
+            const helpScore   = rv.votes_up ?? 0;
+            let expanded      = false;
+            const div = document.createElement('div');
+            div.className = 'se-review';
+            div.style.borderLeftColor = col;
+            const username = Utils.escHtml(rv.author?.personaname ?? 'User');
+            div.innerHTML = `
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+                    <span class="se-avatar-wrap" style="flex-shrink:0;"></span>
+                    <div style="flex:1;min-width:0;">
+                        <span style="font-weight:700;font-size:13px;">
+                            ${username}
+                        </span>
+                        <span style="margin-left:6px;font-size:11px;padding:2px 7px;border-radius:10px;
+                                     color:${col};background:${rv.voted_up ? 'rgba(63,185,80,.18)' : 'rgba(248,81,73,.18)'};">
+                            ${rv.voted_up ? '✓ Recommended' : '✗ Not Recommended'}
+                        </span>
+                    </div>
+                    <span style="font-size:11px;color:${C.txt3};flex-shrink:0;">
+                        ⏱ ${Utils.formatMins(rv.author?.playtime_forever ?? 0)}
+                        · ${Utils.formatDate(rv.timestamp_created)}
+                    </span>
+                </div>
+                <div class="rv-text"
+                     style="font-size:12px;line-height:1.6;color:${C.txt2};cursor:${short ? 'pointer' : 'default'};"
+                     title="${short ? 'Click to expand' : ''}">
+                    ${clip}
+                </div>
+                <div style="margin-top:7px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                    <div style="display:flex;align-items:center;gap:4px;font-size:11px;padding:3px 8px;
+                                border-radius:5px;background:rgba(63,185,80,.12);
+                                border:1px solid rgba(63,185,80,.25);color:${C.green};">
+                        👍 <strong>${helpScore.toLocaleString()}</strong> found this helpful
+                    </div>
+                    ${rv.votes_funny > 0 ? `
+                    <div style="font-size:11px;padding:3px 8px;border-radius:5px;
+                                background:rgba(88,166,255,.1);border:1px solid rgba(88,166,255,.2);color:${C.txt2};">
+                        😄 ${rv.votes_funny.toLocaleString()} funny
+                    </div>` : ''}
+                    <span style="font-size:11px;color:${C.txt3};margin-left:auto;">
+                        💬 ${rv.comment_count ?? 0} comments
+                    </span>
+                </div>
+            `;
+            const avatarWrap = div.querySelector('.se-avatar-wrap');
+            if (rv.author?.avatar) {
+                const img = document.createElement('img');
+                img.src = rv.author.avatar;
+                img.loading = 'lazy';
+                img.width = 28;
+                img.height = 28;
+                img.style.cssText = `border-radius:50%;border:2px solid ${col};`;
+                img.addEventListener('error', () => { img.style.display = 'none'; });
+                avatarWrap.appendChild(img);
+            }
+            if (short) {
+                const rvText = div.querySelector('.rv-text');
+                rvText.onclick = () => {
+                    expanded = !expanded;
+                    rvText.innerHTML = expanded ? escapedText : clip;
+                    rvText.title = expanded ? 'Click to collapse' : 'Click to expand';
+                };
+            }
+            return div;
+        }
         // ── Video lightbox with navigation ──────────────────────────────────
         _showVideoLightbox(index) {
             const trailers = this._trailers || [];
             if (!trailers.length) return;
             let current = index;
             let hlsInstance = null;
+            const prevFocus = document.activeElement;
             document.querySelector('.se-lightbox')?.remove();
             const overlay = document.createElement('div');
             overlay.className = 'se-lightbox';
+            overlay.tabIndex = -1;
+            overlay.setAttribute('role', 'dialog');
+            overlay.setAttribute('aria-modal', 'true');
+            overlay.setAttribute('aria-label', 'Trailer viewer');
             const video = document.createElement('video');
             video.controls = true;
             video.playsInline = true;
@@ -1143,6 +1259,7 @@
                 video.load();
                 overlay.remove();
                 document.removeEventListener('keydown', onKey);
+                prevFocus?.focus?.();
             };
             closeBtn.onclick = (e) => { e.stopPropagation(); cleanup(); };
             overlay.onclick = cleanup;
@@ -1164,6 +1281,14 @@
                 if (e.key === 'Escape') cleanup();
                 if (trailers.length > 1 && e.key === 'ArrowLeft')  navigate(-1);
                 if (trailers.length > 1 && e.key === 'ArrowRight') navigate(1);
+                if (e.key === 'Tab') {
+                    const f = overlay.querySelectorAll('button, a[href], video');
+                    if (f.length) {
+                        const first = f[0], last = f[f.length - 1];
+                        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+                        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+                    }
+                }
             };
             document.addEventListener('keydown', onKey);
             overlay.appendChild(video);
@@ -1171,7 +1296,10 @@
             overlay.appendChild(titleBar);
             overlay.appendChild(closeBtn);
             overlay.appendChild(counter);
+            overlay.querySelector('.se-lb-close')?.setAttribute('aria-label', 'Close');
+            overlay.querySelectorAll('.se-lb-btn').forEach((b, i) => b.setAttribute('aria-label', i === 0 ? 'Previous trailer' : 'Next trailer'));
             document.body.appendChild(overlay);
+            closeBtn.focus();
             loadTrailer(current);
         }
         // ── Screenshot lightbox ─────────────────────────────────────────────
@@ -1180,9 +1308,14 @@
             if (!urls.length) return;
             let current = index;
             let navigating = false;
+            const prevFocus = document.activeElement;
             document.querySelector('.se-lightbox')?.remove();
             const overlay = document.createElement('div');
             overlay.className = 'se-lightbox';
+            overlay.tabIndex = -1;
+            overlay.setAttribute('role', 'dialog');
+            overlay.setAttribute('aria-modal', 'true');
+            overlay.setAttribute('aria-label', 'Screenshot viewer');
             const spinner = document.createElement('div');
             spinner.className = 'se-spinner';
             spinner.style.cssText = 'width:28px;height:28px;position:absolute;';
@@ -1228,11 +1361,20 @@
             const cleanup = () => {
                 document.removeEventListener('keydown', onKey);
                 overlay.remove();
+                prevFocus?.focus?.();
             };
             const onKey = (e) => {
                 if (e.key === 'Escape')     cleanup();
                 if (e.key === 'ArrowLeft')  navigate(-1);
                 if (e.key === 'ArrowRight') navigate(1);
+                if (e.key === 'Tab') {
+                    const f = overlay.querySelectorAll('button, a[href]');
+                    if (f.length) {
+                        const first = f[0], last = f[f.length - 1];
+                        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+                        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+                    }
+                }
             };
             const closeBtn = document.createElement('button');
             closeBtn.className = 'se-lb-close';
@@ -1258,8 +1400,11 @@
             overlay.appendChild(img);
             overlay.appendChild(closeBtn);
             overlay.appendChild(counter);
+            overlay.querySelector('.se-lb-close')?.setAttribute('aria-label', 'Close');
+            overlay.querySelectorAll('.se-lb-btn').forEach((b, i) => b.setAttribute('aria-label', i === 0 ? 'Previous screenshot' : 'Next screenshot'));
             document.body.appendChild(overlay);
             document.addEventListener('keydown', onKey);
+            closeBtn.focus();
         }
         // ── Helpers ──────────────────────────────────────────────────────────
         _panel(id, visible) {
@@ -1296,7 +1441,7 @@
                 () => location.reload());
         }
         _applyManual(value) {
-            const m = String(value).match(/(\d{3,})/);
+            const m = String(value).match(/\/app\/(\d+)/) || String(value).trim().match(/^(\d{3,})$/);
             if (!m) return;
             Utils.setCache(this.path, { steamUrl: `https://store.steampowered.com/app/${m[1]}/`, manual: true });
             this._reviews = null;

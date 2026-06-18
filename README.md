@@ -12,10 +12,11 @@ A userscript that adds a compact Steam info card to FitGirl Repacks pages, givin
 - **Price & Savings** — current Steam price, live discount, or “Free to Play”
 - **System Requirements** — minimum/recommended specs in a dedicated tab
 - **Manual Override** — a “Wrong game?” link to set the correct Steam app when resolution misses
-- **Game Info Bar** — release date, developer, and genre tags at a glance
+- **Game Info Bar** — price, release date, developer, genres, plus platform / controller / co-op / DLC / maturity signals and a short description
 - **Trailers** — watch Steam trailers in a fullscreen lightbox with HLS streaming support, navigate between trailers with arrow keys
 - **Screenshots** — browse screenshots in a lightbox overlay with keyboard navigation
-- **Most Helpful Reviews** — top 15 reviews with playtime, helpfulness score, and expand/collapse
+- **Accessible Lightboxes** — dialog roles, labelled controls, focus trap/restore, and mobile-friendly touch targets
+- **Most Helpful Reviews** — filter (Positive/Negative) and sort (Helpful/Recent) the review list inline
 - **Smart Caching** — caches Steam data in localStorage (7-day expiry) with automatic quota management
 - **3-Tier URL Resolution** — finds the Steam page via the embedded trailer/asset URL on the FitGirl page, then the Steam Search API by URL slug, then CS.RIN.RU as a last resort
 - **Light & Dark Mode** — auto-detects the page theme (and re-detects when the page toggles theme) and adapts colors
