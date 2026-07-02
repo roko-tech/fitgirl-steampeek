@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FitGirl SteamPeek
 // @namespace    https://github.com/roko-tech/fitgirl-steampeek
-// @version      1.14
+// @version      1.15
 // @description  Peek at Steam ratings, trailers, screenshots, and reviews directly on FitGirl pages
 // @author       roko-tech
 // @license      MIT
@@ -14,24 +14,71 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM_openInTab
 // @grant        GM_registerMenuCommand
+// @grant        GM_notification
+// @grant        GM_info
 // @connect      store.steampowered.com
 // @connect      cs.rin.ru
 // @connect      www.protondb.com
-// @require      https://cdn.jsdelivr.net/npm/hls.js@1.5.15/dist/hls.min.js
+// @require      https://cdn.jsdelivr.net/npm/hls.js@1.5.15/dist/hls.min.js#sha256=a91c218fd92b39c2c929b1a08400bc8e85df34a5d474dece920103a2c51675df
 // @run-at       document-end
 // ==/UserScript==
 (function () {
     'use strict';
     const CONFIG = {
-        VERSION: '1.14',
+        // Derived from @version so the cache-key namespace can't drift from the release version.
+        VERSION: (typeof GM_info !== 'undefined' && GM_info.script?.version) || '1.15',
         CACHE_PREFIX: 'se8:',
         CACHE_EXPIRY_DAYS: 7,
         MAX_COMMENTS: 15,
         MAX_SCREENSHOTS: 9,
         MAX_GENRES: 4,
         MAX_CACHE_ENTRIES: 50,
+        MAX_PICKER: 6,
+        MAX_RECENT: 8,
         OBSERVER_TIMEOUT: 15000
     };
+    // ==================== RESOLVER (pure, testable) ====================
+    const Resolver = {
+        // Tier-0: a Steam CDN URL whose path encodes the GAME's appid (not a movie's).
+        // Movie thumbnails use a per-movie ID under steam/apps/<movieId>/<hash>/movie_*.jpg;
+        // game-level assets use the real appid under the known prefixes below.
+        APPID_RE: /(?:steamstatic\.com|steamcdn-a\.akamaihd\.net)[^"'\s]*?(?:store_trailers\/(\d+)\/|steam\/apps\/(\d+)\/(?:ss_|header|library_|extras\/|capsule_|page_bg))/i,
+        appIdFromHtml(html) {
+            const m = String(html).match(this.APPID_RE);
+            return m ? (m[1] || m[2]) : null;
+        },
+        titleFromPath(pathname) {
+            let path = pathname;
+            try { path = decodeURIComponent(path); } catch { /* keep encoded form */ }
+            return path.replace(/^\/|\/$/g, '').replace(/-/g, ' ').trim();
+        },
+        // Archive/search/pagination paths must not be treated as game pages even
+        // when they happen to contain exactly one article.
+        isListPath(pathname, search) {
+            return /^\/(tag|category|page|author)\//.test(pathname)
+                || new URLSearchParams(search).has('s');
+        },
+        norm(s) { return s.toLowerCase().replace(/[^a-z0-9]/g, ''); },
+        // Prefer (a) exact normalized match, (b) item whose name CONTAINS the full
+        // target as a substring (mitigates the wrong-sequel risk when the original
+        // query has been shortened to find any results), (c) first item.
+        pickSearchResult(items, title) {
+            if (!items?.length) return null;
+            const target   = this.norm(title);
+            const exact    = items.find(i => this.norm(i.name) === target);
+            const contains = !exact && items.find(i => this.norm(i.name).includes(target));
+            return exact || contains || items[0];
+        },
+        appIdFromManualValue(value) {
+            const m = String(value).match(/\/app\/(\d+)/) || String(value).trim().match(/^(\d+)$/);
+            return m ? m[1] : null;
+        }
+    };
+    // Node test hook: export the pure logic and bail before any DOM/storage access.
+    if (typeof document === 'undefined') {
+        if (typeof module !== 'undefined') module.exports = { Resolver };
+        return;
+    }
     const DARK = {
         bg0: '#0d1117', bg1: '#161b22', bg2: '#21262d',
         txt: '#e6edf3', txt2: '#8b949e', txt3: '#6e7681',
@@ -53,7 +100,7 @@
     // ==================== SETTINGS ====================
     const SETTINGS_KEY = 'se-settings';
     const SETTINGS_DEFAULTS = {
-        showCompat: true, showFeaturePills: true, showBlurb: true, showPcgw: true,
+        showCompat: true, showFeaturePills: true, showBlurb: true, showPcgw: true, showRecent: true,
         defaultMediaTab: 'trailers', defaultReviewSort: 'helpful', collapseByDefault: false
     };
     const Settings = {
@@ -78,6 +125,7 @@
         { key: 'showFeaturePills', label: 'Platform / controller / DLC pills',  type: 'toggle' },
         { key: 'showBlurb',        label: 'Game description',                   type: 'toggle' },
         { key: 'showPcgw',         label: 'PCGamingWiki link',                  type: 'toggle' },
+        { key: 'showRecent',       label: 'Recently viewed list',               type: 'toggle' },
         { key: 'defaultMediaTab',  label: 'Default tab',                        type: 'select', options: ['trailers', 'screenshots', 'reviews', 'sysreq'] },
         { key: 'defaultReviewSort',label: 'Default review sort',                type: 'select', options: ['helpful', 'recent'] },
         { key: 'collapseByDefault',label: 'Start collapsed (on reload)',        type: 'toggle' }
@@ -291,11 +339,12 @@
             const toRemove = Math.max(1, entries.length - CONFIG.MAX_CACHE_ENTRIES);
             for (let i = 0; i < toRemove; i++) localStorage.removeItem(entries[i].key);
         },
+        // Attribute-safe: quotes are escaped too, so values may sit inside "..." attributes.
         escHtml(s) {
             if (!s) return '';
-            const div = document.createElement('div');
-            div.textContent = s;
-            return div.innerHTML;
+            return String(s).replace(/[&<>"']/g, c => (
+                { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+            ));
         },
         forceHttps(url) {
             return url ? url.replace(/^http:\/\//i, 'https://') : '';
@@ -339,11 +388,6 @@
             if (score >= 75) return '#6c3';
             if (score >= 50) return '#fc3';
             return '#f33';
-        },
-        extractTitle() {
-            let path = location.pathname;
-            try { path = decodeURIComponent(path); } catch { /* keep encoded form */ }
-            return path.replace(/^\/|\/$/g, '').replace(/-/g, ' ').trim();
         }
     };
     // ==================== API ====================
@@ -359,7 +403,7 @@
         },
         async csrin(url) {
             return this.req({
-                method: 'GET', url, anonymous: false, cookies: true,
+                method: 'GET', url, anonymous: false,
                 headers: { 'Referer': 'https://cs.rin.ru/', 'User-Agent': navigator.userAgent }
             });
         },
@@ -374,6 +418,7 @@
             return JSON.parse(r.responseText);
         },
         async steamSearch(title) {
+            // cc is mandatory: without it storesearch returns zero results (verified 2026-07-02).
             const r = await this.req({ method: 'GET', url: `https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(title)}&l=en&cc=US` });
             return JSON.parse(r.responseText);
         },
@@ -394,7 +439,10 @@
             this.anchor     = null;
             this.appId      = null;
             this._reviews   = null;
-            this._collapsed = (() => { const s = localStorage.getItem('se-collapsed'); return s !== null ? s === '1' : Settings.get('collapseByDefault'); })();
+            this._collapsed = (() => {
+                if (Settings.get('collapseByDefault')) return true; // the setting wins on every load
+                return localStorage.getItem('se-collapsed') === '1';
+            })();
             this._settingsOpen = false;
             this._reviewsReady = null;
             this._reviewsResolve = null;
@@ -568,7 +616,7 @@
         _onSettingChange(s, val) {
             if (s.proxy) { setThemePref(val); this._settingsOpen = true; this._applyTheme(); return; }
             Settings.set(s.key, val);
-            if (s.key === 'collapseByDefault') return; // seeds the next page load only
+            if (s.key === 'collapseByDefault') return; // applies on the next page load
             this._load(); // re-render body from cache with the new gates (panel stays open)
         }
         _setBody(html) { this.body.innerHTML = html; }
@@ -662,14 +710,11 @@
                     <button id="se-manual"
                         style="margin-left:6px;padding:4px 12px;background:${C.bg2};color:${C.txt};
                                border:1px solid ${C.border};border-radius:5px;cursor:pointer;font-size:12px;">
-                        Enter Steam URL
+                        Pick the right game
                     </button>
                 `);
                 this.body.querySelector('#se-retry')?.addEventListener('click', () => this._refresh());
-                this.body.querySelector('#se-manual')?.addEventListener('click', () => {
-                    const v = prompt('Paste the correct Steam store URL or appID:');
-                    if (v) this._applyManual(v);
-                });
+                this.body.querySelector('#se-manual')?.addEventListener('click', () => this._showPicker());
             }
         }
         // ── 3-Tier URL resolution ────────────────────────────────────────────
@@ -677,7 +722,7 @@
             const domUrl = this._fromPageDom();
             if (domUrl) return { url: domUrl, tier: 'page' };
             try {
-                const title = Utils.extractTitle();
+                const title = Resolver.titleFromPath(this.path);
                 if (title) {
                     const url = await this._fromSteamSearch(title);
                     if (url) return { url, tier: 'steam' };
@@ -697,33 +742,25 @@
             }
         }
         _fromPageDom() {
-            // Match a Steam CDN URL whose path encodes the GAME's appid (not a movie's).
-            // Movie thumbnails use a different per-movie ID under store_item_assets/steam/apps/<movieId>/<hash>/movie_*.jpg.
-            // Game-level assets use the real appid under known prefixes: store_trailers, ss_, header, library_, extras, capsule_, page_bg.
-            const re = /(?:steamstatic\.com|steamcdn-a\.akamaihd\.net)[^"'\s]*?(?:store_trailers\/(\d+)\/|steam\/apps\/(\d+)\/(?:ss_|header|library_|extras\/|capsule_|page_bg))/i;
-            const m  = document.body.innerHTML.match(re);
-            const id = m && (m[1] || m[2]);
+            // Scan only the post content: comments below it must not steer resolution.
+            const root = document.querySelector('.entry-content') || document.body;
+            const id = Resolver.appIdFromHtml(root.innerHTML);
             return id ? `https://store.steampowered.com/app/${id}/` : null;
         }
-        async _fromSteamSearch(title) {
-            if (!title) return null;
-            const norm   = s => s.toLowerCase().replace(/[^a-z0-9]/g, '');
-            const target = norm(title);
-            const words  = title.split(/\s+/);
+        // Progressive shortening: retry with fewer words until the API returns anything.
+        async _searchCandidates(title) {
+            if (!title) return [];
+            const words = title.split(/\s+/);
             for (let n = words.length; n >= 1; n--) {
                 if (n < words.length) await new Promise(r => setTimeout(r, 200));
                 const json = await API.steamSearch(words.slice(0, n).join(' '));
-                if (json.items?.length) {
-                    // Prefer (a) exact normalized match, (b) item whose name CONTAINS the full
-                    // target as a substring (mitigates the wrong-sequel risk when the original
-                    // query has been shortened to find any results), (c) first item.
-                    const exact    = json.items.find(i => norm(i.name) === target);
-                    const contains = !exact && json.items.find(i => norm(i.name).includes(target));
-                    const best     = exact || contains || json.items[0];
-                    return `https://store.steampowered.com/app/${best.id}/`;
-                }
+                if (json.items?.length) return json.items;
             }
-            return null;
+            return [];
+        }
+        async _fromSteamSearch(title) {
+            const best = Resolver.pickSearchResult(await this._searchCandidates(title), title);
+            return best ? `https://store.steampowered.com/app/${best.id}/` : null;
         }
         // ── Display ─────────────────────────────────────────────────────────
         async _display(steamUrl, gen) {
@@ -774,18 +811,20 @@
                         <div class="se-skeleton" style="height:105px;"></div>
                     </div>
                 </div>
+                <div id="se-recent"></div>
             `);
             this._reviewsReady = new Promise(resolve => { this._reviewsResolve = resolve; });
             this.body.querySelector('#se-wrong')?.addEventListener('click', (e) => {
                 e.preventDefault();
-                const v = prompt('Paste the correct Steam store URL or appID:');
-                if (v) this._applyManual(v);
+                this._showPicker();
             });
             this.body.querySelector('#se-copy')?.addEventListener('click', () => {
-                navigator.clipboard?.writeText(steamUrl);
                 const b = this.body.querySelector('#se-copy');
-                if (b) { b.textContent = '✓'; setTimeout(() => { b.textContent = '⧉'; }, 1200); }
+                const flash = t => { if (b) { b.textContent = t; setTimeout(() => { b.textContent = '⧉'; }, 1200); } };
+                if (!navigator.clipboard) { flash('✗'); return; }
+                navigator.clipboard.writeText(steamUrl).then(() => flash('✓'), () => flash('✗'));
             });
+            this._renderRecent();
             await Promise.allSettled([
                 this._loadRatingAndReviews(this.appId, gen),
                 this._loadMedia(this.appId, gen),
@@ -895,6 +934,18 @@
                 ).join(' ');
                 parts.push(pills);
             }
+            // DRM / third-party-account notices straight from appdetails — never gated by a
+            // setting: for this audience they outrank every other pill.
+            const notice = s => {
+                const t = String(s).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+                return Utils.escHtml(t.length > 90 ? t.slice(0, 90) + '…' : t);
+            };
+            if (d.drm_notice) {
+                parts.push(`<span class="se-genre-pill" style="border-color:${C.red};color:${C.red};" title="DRM notice from Steam">🔒 ${notice(d.drm_notice)}</span>`);
+            }
+            if (d.ext_user_account_notice) {
+                parts.push(`<span class="se-genre-pill" style="border-color:${C.yellow};color:${C.yellow};" title="Third-party account required (Steam notice)">👤 ${notice(d.ext_user_account_notice)}</span>`);
+            }
             // Platform / feature / DLC / maturity signals — all from the already-fetched appdetails.
             if (Settings.get('showFeaturePills')) {
             const plat = d.platforms || {};
@@ -980,9 +1031,13 @@
             const out = document.createElement('div');
             out.style.cssText = `font-size:12px;color:${C.txt2};line-height:1.6;`;
             const fmt = (html) => {
-                const tmp = document.createElement('div');
-                tmp.innerHTML = String(html).replace(/<br\s*\/?>/gi, '\n').replace(/<\/(li|p|div|ul)>/gi, '\n');
-                return (tmp.textContent || '').replace(/\n{2,}/g, '\n').trim();
+                // Parse inert: DOMParser never loads resources or runs handlers,
+                // unlike a live innerHTML assignment.
+                const doc = new DOMParser().parseFromString(
+                    String(html).replace(/<br\s*\/?>/gi, '\n').replace(/<\/(li|p|div|ul)>/gi, '\n'),
+                    'text/html'
+                );
+                return (doc.body.textContent || '').replace(/\n{2,}/g, '\n').trim();
             };
             const parts = [];
             if (req.minimum) parts.push(fmt(req.minimum));
@@ -1277,10 +1332,18 @@
             }
             if (short) {
                 const rvText = div.querySelector('.rv-text');
-                rvText.onclick = () => {
+                rvText.tabIndex = 0;
+                rvText.setAttribute('role', 'button');
+                rvText.setAttribute('aria-expanded', 'false');
+                const toggle = () => {
                     expanded = !expanded;
                     rvText.innerHTML = expanded ? escapedText : clip;
                     rvText.title = expanded ? 'Click to collapse' : 'Click to expand';
+                    rvText.setAttribute('aria-expanded', String(expanded));
+                };
+                rvText.onclick = toggle;
+                rvText.onkeydown = (e) => {
+                    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
                 };
             }
             return div;
@@ -1399,8 +1462,10 @@
             }
             const onKey = (e) => {
                 if (e.key === 'Escape') cleanup();
-                if (trailers.length > 1 && e.key === 'ArrowLeft')  navigate(-1);
-                if (trailers.length > 1 && e.key === 'ArrowRight') navigate(1);
+                // Leave arrow keys to the focused <video>: they seek there natively.
+                const arrowsFree = e.target !== video;
+                if (arrowsFree && trailers.length > 1 && e.key === 'ArrowLeft')  navigate(-1);
+                if (arrowsFree && trailers.length > 1 && e.key === 'ArrowRight') navigate(1);
                 if (e.key === 'Tab') {
                     const f = overlay.querySelectorAll('button, a[href], video');
                     if (f.length) {
@@ -1561,9 +1626,15 @@
                 () => location.reload());
         }
         _applyManual(value) {
-            const m = String(value).match(/\/app\/(\d+)/) || String(value).trim().match(/^(\d{3,})$/);
-            if (!m) return;
-            Utils.setCache(this.path, { steamUrl: `https://store.steampowered.com/app/${m[1]}/`, manual: true });
+            const id = Resolver.appIdFromManualValue(value);
+            if (!id) {
+                alert('Not a valid Steam URL or app ID.\nPaste e.g. https://store.steampowered.com/app/12345/… or just the numeric ID.');
+                return;
+            }
+            this._applyAppId(id);
+        }
+        _applyAppId(id) {
+            Utils.setCache(this.path, { steamUrl: `https://store.steampowered.com/app/${id}/`, manual: true });
             this._reviews = null;
             this._cachedRating    = null;
             this._cachedReviews   = null;
@@ -1575,6 +1646,114 @@
             this._setBadge('', '');
             this._setBody(`<span class="se-spinner"></span> Loading Steam data…`);
             this._load();
+        }
+        // ── Wrong-game recovery: inline candidate picker ────────────────────
+        async _showPicker() {
+            const gen = ++this._gen; // cancels in-flight loads so they can't stomp the picker
+            this._setBody(`<span class="se-spinner"></span> Searching Steam…`);
+            let items = [];
+            try { items = await this._searchCandidates(Resolver.titleFromPath(this.path)); }
+            catch { /* no results — manual entry below still works */ }
+            if (gen !== this._gen) return;
+            this._setBody('');
+            const box = document.createElement('div');
+            box.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
+            const head = document.createElement('div');
+            head.style.cssText = `font-weight:700;font-size:13px;color:${C.txt};`;
+            head.textContent = items.length ? 'Which game is this?' : 'No Steam matches found.';
+            box.appendChild(head);
+            items.slice(0, CONFIG.MAX_PICKER).forEach(it => {
+                const row = document.createElement('button');
+                row.style.cssText = `display:flex;align-items:center;gap:10px;padding:6px 8px;width:100%;
+                    background:${C.bg0};border:1px solid ${C.border};border-radius:6px;
+                    cursor:pointer;text-align:left;color:${C.txt};font-size:12px;`;
+                if (it.tiny_image) {
+                    const img = document.createElement('img');
+                    img.src = Utils.forceHttps(it.tiny_image);
+                    img.alt = '';
+                    img.loading = 'lazy';
+                    img.style.cssText = 'width:60px;height:23px;object-fit:cover;border-radius:3px;flex-shrink:0;';
+                    img.addEventListener('error', () => { img.style.display = 'none'; });
+                    row.appendChild(img);
+                }
+                const name = document.createElement('span');
+                name.textContent = it.name;
+                name.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+                const idTag = document.createElement('span');
+                idTag.textContent = `#${it.id}`;
+                idTag.style.cssText = `color:${C.txt3};font-size:11px;flex-shrink:0;`;
+                row.appendChild(name);
+                row.appendChild(idTag);
+                row.onclick = () => this._applyAppId(String(it.id));
+                box.appendChild(row);
+            });
+            const foot = document.createElement('div');
+            foot.style.cssText = 'display:flex;gap:6px;margin-top:4px;';
+            const paste = document.createElement('button');
+            paste.className = 'se-tab';
+            paste.textContent = '⌨ Paste URL / app ID…';
+            paste.onclick = () => {
+                const v = prompt('Paste the correct Steam store URL or appID:');
+                if (v) this._applyManual(v);
+            };
+            const cancel = document.createElement('button');
+            cancel.className = 'se-tab';
+            cancel.textContent = 'Cancel';
+            cancel.onclick = () => this._load();
+            foot.appendChild(paste);
+            foot.appendChild(cancel);
+            box.appendChild(foot);
+            this.body.appendChild(box);
+        }
+        // ── Recently viewed (from cache, zero network) ──────────────────────
+        _renderRecent() {
+            if (!Settings.get('showRecent')) return;
+            const slot = this.body.querySelector('#se-recent');
+            if (!slot) return;
+            const rows = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (!k || !k.startsWith(CONFIG.CACHE_PREFIX)) continue;
+                const rest = k.slice(CONFIG.CACHE_PREFIX.length);
+                const sep = rest.indexOf(':');
+                if (sep === -1) continue;
+                const path = rest.slice(sep + 1);
+                if (!path.startsWith('/') || path === this.path) continue;
+                try {
+                    // Tolerant of entries written by older versions: read only name/rating.
+                    const d = JSON.parse(localStorage.getItem(k));
+                    const name = d?.data?.detailsData?.name;
+                    if (!name) continue;
+                    rows.push({ path, name, ts: d.ts || '', desc: d.data.ratingData?.review_score_desc || '' });
+                } catch { /* unreadable entry — skip */ }
+            }
+            if (!rows.length) return;
+            rows.sort((a, b) => b.ts.localeCompare(a.ts));
+            const det = document.createElement('details');
+            det.style.cssText = `margin-top:12px;border-top:1px solid ${C.border};padding-top:8px;`;
+            const sum = document.createElement('summary');
+            sum.textContent = `🕘 Recently viewed (${Math.min(rows.length, CONFIG.MAX_RECENT)})`;
+            sum.style.cssText = `cursor:pointer;font-size:12px;font-weight:600;color:${C.txt2};`;
+            det.appendChild(sum);
+            const list = document.createElement('div');
+            list.style.cssText = 'display:flex;flex-direction:column;gap:4px;margin-top:8px;';
+            rows.slice(0, CONFIG.MAX_RECENT).forEach(r => {
+                const line = document.createElement('div');
+                line.style.cssText = 'display:flex;align-items:center;gap:8px;font-size:12px;';
+                const a = document.createElement('a');
+                a.href = r.path;
+                a.textContent = r.name;
+                a.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+                const stars = document.createElement('span');
+                stars.textContent = r.desc ? Utils.ratingStars(r.desc) : '';
+                stars.title = r.desc;
+                stars.style.cssText = 'color:#ffd700;flex-shrink:0;letter-spacing:1px;font-size:11px;';
+                line.appendChild(a);
+                line.appendChild(stars);
+                list.appendChild(line);
+            });
+            det.appendChild(list);
+            slot.replaceChildren(det);
         }
         _refresh() {
             Utils.clearCache(this.path);
@@ -1611,7 +1790,8 @@
     });
     // ==================== BOOT ====================
     const isSinglePost = document.body.classList.contains('single')
-                      || document.querySelectorAll('article.post').length === 1;
+                      || (!Resolver.isListPath(location.pathname, location.search)
+                          && document.querySelectorAll('article.post').length === 1);
     let activeCard = null;
     if (isSinglePost) {
         activeCard = new SteamCard();

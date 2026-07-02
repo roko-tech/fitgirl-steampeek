@@ -12,7 +12,9 @@ A userscript that adds a compact Steam info card to FitGirl Repacks pages, givin
 - **PCGamingWiki** — one-click link to the game's fixes, DRM/Denuvo, and anti-cheat info
 - **Price & Savings** — current Steam price, live discount, or “Free to Play”
 - **System Requirements** — minimum/recommended specs in a dedicated tab
-- **Manual Override** — a “Wrong game?” link to set the correct Steam app when resolution misses
+- **DRM & Account Notices** — Denuvo/DRM and third-party-account warnings straight from Steam
+- **Wrong Game? Picker** — an inline picker of Steam search candidates (with thumbnails) to fix resolution in one click, plus a paste-a-URL fallback
+- **Recently Viewed** — a collapsible list of the games you last looked at, served from the local cache
 - **Settings** — a ⚙ panel to toggle sections (compat pills, feature pills, description, PCGamingWiki), pick the default tab/review sort/theme, and start collapsed
 - **Game Info Bar** — price, release date, developer, genres, plus platform / controller / co-op / DLC / maturity signals and a short description
 - **Trailers** — watch Steam trailers in a fullscreen lightbox with HLS streaming support, navigate between trailers with arrow keys
@@ -68,6 +70,14 @@ When you open a game page on FitGirl Repacks, the script:
 | `cs.rin.ru` | Fallback Steam URL extraction (requires login) |
 | `www.protondb.com` | Fetch ProtonDB / Steam Deck Proton compatibility tier |
 | `cdn.jsdelivr.net` | Load hls.js for trailer streaming |
+
+## Development
+
+The resolution logic (title extraction, tier-0 appid matching, search-result picking) is pure and unit-tested:
+
+```
+node --test
+```
 
 ## Cache Management
 
