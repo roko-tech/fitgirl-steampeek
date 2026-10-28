@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FitGirl SteamPeek
 // @namespace    https://github.com/roko-tech/fitgirl-steampeek
-// @version      1.15
+// @version      1.16
 // @description  Peek at Steam ratings, trailers, screenshots, and reviews directly on FitGirl pages
 // @author       roko-tech
 // @license      MIT
@@ -17,6 +17,7 @@
 // @grant        GM_notification
 // @grant        GM_info
 // @connect      store.steampowered.com
+// @connect      api.steampowered.com
 // @connect      cs.rin.ru
 // @connect      www.protondb.com
 // @require      https://cdn.jsdelivr.net/npm/hls.js@1.5.15/dist/hls.min.js#sha256=a91c218fd92b39c2c929b1a08400bc8e85df34a5d474dece920103a2c51675df
@@ -26,7 +27,7 @@
     'use strict';
     const CONFIG = {
         // Derived from @version so the cache-key namespace can't drift from the release version.
-        VERSION: (typeof GM_info !== 'undefined' && GM_info.script?.version) || '1.15',
+        VERSION: (typeof GM_info !== 'undefined' && GM_info.script?.version) || '1.16',
         CACHE_PREFIX: 'se8:',
         CACHE_EXPIRY_DAYS: 7,
         MAX_COMMENTS: 15,
@@ -412,10 +413,13 @@
             return JSON.parse(r.responseText);
         },
         async reviews(id, n = CONFIG.MAX_COMMENTS, opts = {}) {
-            const filter = opts.filter || 'helpful';
-            const reviewType = opts.review_type || 'all';
-            const r = await this.req({ method: 'GET', url: `https://store.steampowered.com/appreviews/${id}?json=1&language=english&filter=${filter}&review_type=${reviewType}&purchase_type=all&num_per_page=${n}` });
-            return JSON.parse(r.responseText);
+            // Valve retired store.steampowered.com/appreviews on 2026-10-22 (now 302s to the homepage);
+            // GetAppReviews is the keyless replacement. Enums verified 2026-10-28:
+            // filter 0=helpful 1=recent · review_type 0=all 1=positive 2=negative · purchase_type 1=all.
+            const filter = opts.filter === 'recent' ? 1 : 0;
+            const reviewType = opts.review_type === 'positive' ? 1 : opts.review_type === 'negative' ? 2 : 0;
+            const r = await this.req({ method: 'GET', url: `https://api.steampowered.com/IUserReviewsService/GetAppReviews/v1/?appid=${id}&filter=${filter}&review_type=${reviewType}&purchase_type=1&languages%5B0%5D=english&num_per_page=${n}` });
+            return JSON.parse(r.responseText).response || {};
         },
         async steamSearch(title) {
             // cc is mandatory: without it storesearch returns zero results (verified 2026-07-02).
